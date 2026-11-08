@@ -4,3 +4,4 @@ src-tauri/gen/
 src-tauri/icons/
 dist/
 *.log
+.github/
