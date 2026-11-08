@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIPG Desktop</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <nav class="side">
+    <div class="brand"><span class="bolt">⚡</span> AIPG</div>
+    <button class="nav active" data-view="overview">Overview</button>
+    <button class="nav" data-view="models">Models</button>
+    <button class="nav" data-view="earnings">Earnings</button>
+    <button class="nav" data-view="settings">Settings</button>
+    <div class="spacer"></div>
+    <div class="conn" id="conn"><span class="dot" id="conndot"></span><span id="connlabel">not connected</span></div>
+  </nav>
+
+  <main>
+    <!-- OVERVIEW -->
+    <section class="view active" id="view-overview">
+      <header class="vh"><h1>Overview</h1><button class="btn" id="refresh">↻ Refresh</button></header>
+      <div id="needkey" class="banner" style="display:none">
+        No API key yet. Open <b>Settings</b> and paste your <code>grid_…</code> key to connect.
+      </div>
+      <div class="stats" id="stats"></div>
+      <h2 class="sec">Your workers</h2>
+      <div id="workers" class="cards"><p class="muted">—</p></div>
+      <p class="stamp" id="stamp"></p>
+    </section>
+
+    <!-- MODELS -->
+    <section class="view" id="view-models">
+      <header class="vh"><h1>Models</h1><button class="btn" id="refresh-models">↻</button></header>
+      <p class="muted">Live from the grid. Prices are USD per million tokens.</p>
+      <h2 class="sec">Text &amp; vision</h2>
+      <div id="models" class="cards"><p class="muted">—</p></div>
+      <h2 class="sec">Image</h2>
+      <div id="imgmodels" class="cards"><p class="muted">—</p></div>
+    </section>
+
+    <!-- EARNINGS -->
+    <section class="view" id="view-earnings">
+      <header class="vh"><h1>Earnings</h1><button class="btn" id="refresh-earnings">↻</button></header>
+      <div class="stats" id="estats"></div>
+      <h2 class="sec">Recent jobs</h2>
+      <div class="tablewrap"><table id="jobs"><thead><tr>
+        <th>when</th><th>model</th><th>type</th><th>den</th><th>units</th><th>dur</th>
+      </tr></thead><tbody></tbody></table></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings">
+      <header class="vh"><h1>Settings</h1></header>
+      <div class="field">
+        <label>Grid API key</label>
+        <div class="row">
+          <input id="key" type="password" placeholder="grid_…" autocomplete="off" spellcheck="false">
+          <button class="btn" id="savekey">Save</button>
+          <button class="btn ghost" id="clearkey">Forget</button>
+        </div>
+        <p class="hint">Stored locally in this app only, sent only to api.aipowergrid.io.</p>
+      </div>
+      <div class="field">
+        <label><input type="checkbox" id="alerts"> Offline alerts (native notifications while the app is open)</label>
+        <p class="hint">Notifies you when a worker goes offline, enters maintenance, or recovers. Checks every 2 minutes.</p>
+      </div>
+      <div class="field">
+        <label>ntfy topic (optional — push to your phone too)</label>
+        <div class="row">
+          <input id="ntfy" type="text" placeholder="aipg-… (a long random string)" autocomplete="off" spellcheck="false">
+          <button class="btn" id="saventfy">Save</button>
+        </div>
+        <p class="hint">If set, alerts are also POSTed to ntfy.sh/&lt;topic&gt;. The topic name is the only credential — use a long random one and subscribe in the ntfy app.</p>
+      </div>
+      <div class="field">
+        <label>Theme</label>
+        <div class="row"><button class="btn" id="theme">◐ Toggle light / dark</button></div>
+      </div>
+      <div class="field">
+        <p class="hint">AIPG Desktop · unofficial, community-built · not affiliated with AI Power Grid.
+          <a href="#" data-ext="https://github.com/speteai/aipg-desktop">Source on GitHub</a></p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="main.js"></script>
+</body>
+</html>
