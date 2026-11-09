@@ -266,6 +266,8 @@ async function loadWorker() {
   }
   $("#wname").value = get("aipg_wname") || "";
   $("#wmodel").value = get("aipg_wmodel") || "qwen3:8b";
+  $("#wname2").value = get("aipg_wname") || "";
+  $("#wmodel2").value = get("aipg_wmodel") || "qwen3:8b";
   if (!WORKER_WIRED) wireWorker();
   try { renderPrereqs(await invoke("prereqs")); } catch (e) { toast("prereqs: " + emsg(e)); }
   try { WORKER_RUNNING = await invoke("worker_running"); } catch (e) {}
@@ -274,9 +276,41 @@ async function loadWorker() {
 }
 
 function syncRunButtons() {
+  const dl = $("#worker-dl-state").textContent.indexOf("downloaded") >= 0;
   $("#btn-stop").disabled = !WORKER_RUNNING;
-  $("#btn-start").disabled = WORKER_RUNNING || $("#worker-dl-state").textContent.indexOf("downloaded") < 0;
+  $("#btn-start").disabled = WORKER_RUNNING || !dl;
+  $("#btn-stop2").disabled = !WORKER_RUNNING;
+  $("#btn-auto").disabled = WORKER_RUNNING;
   wsetStatus(WORKER_RUNNING ? "running" : "idle", WORKER_RUNNING ? "run" : "");
+}
+
+async function stopWorker() {
+  $("#btn-stop").disabled = $("#btn-stop2").disabled = true;
+  try { await invoke("worker_stop"); } catch (e) {}
+  WORKER_RUNNING = false; syncRunButtons();
+}
+
+async function autoStartWorker() {
+  const api_key = apiKey();
+  if (!api_key) { toast("Erst API-Key in Settings speichern"); return show("settings"); }
+  const worker_name = $("#wname2").value.trim();
+  const model = $("#wmodel2").value.trim() || "qwen3:8b";
+  set("aipg_wname", worker_name); set("aipg_wmodel", model);
+  $("#wname").value = worker_name; $("#wmodel").value = model;
+  $("#btn-auto").disabled = true; wsetStatus("starting…", "warn");
+  try {
+    logLine("[auto] Ollama sicherstellen…"); await invoke("ollama_ensure");
+    const p = await invoke("prereqs");
+    if (!p.worker_downloaded) { logLine("[auto] Worker-Binary laden (SHA-256-geprüft)…"); bar("#dlbar", 0); await invoke("download_worker"); $("#dlbar").style.display = "none"; }
+    logLine("[auto] Modell " + model + " bereitstellen…"); bar("#pullbar", 0); await invoke("ollama_pull", { model }); $("#pullbar").style.display = "none";
+    logLine("[auto] Worker starten…");
+    await invoke("worker_start", { cfg: { api_key, model, worker_name } });
+    WORKER_RUNNING = true; toast("Worker läuft");
+  } catch (e) { toast(emsg(e)); logLine("[auto] Fehler: " + emsg(e)); }
+  finally {
+    try { renderPrereqs(await invoke("prereqs")); } catch (e) {}
+    syncRunButtons();
+  }
 }
 
 function wireWorker() {
@@ -352,12 +386,117 @@ function wireWorker() {
   };
   $("#btn-clearlog").onclick = () => { $("#wlog").textContent = "—"; };
 
-  $("#btn-stop").onclick = async () => {
-    $("#btn-stop").disabled = true;
-    try { await invoke("worker_stop"); } catch (e) {}
-    WORKER_RUNNING = false; syncRunButtons();
-  };
+  $("#btn-auto").onclick = autoStartWorker;
+  $("#btn-stop").onclick = stopWorker;
+  $("#btn-stop2").onclick = stopWorker;
 }
+
+/* ---------- chat (grid auto/model or local ollama, streaming) ---------- */
+let CHAT_WIRED = false, CHAT_MSGS = [], CHAT_ABORT = null;
+const OLLAMA_LOCAL = "http://127.0.0.1:11434/v1";
+
+function chatSource() { const r = document.querySelector('input[name=chatsrc]:checked'); return r ? r.value : "grid"; }
+
+async function fillChatModels() {
+  const src = chatSource(), sel = $("#chatmodel");
+  if (src === "grid") {
+    let ids = ["auto"];
+    try { const d = await api("/models", false); ids = (d.data || []).map((m) => m.id); } catch (e) {}
+    ids.sort((a, b) => (a === "auto" ? -1 : b === "auto" ? 1 : 0));
+    sel.innerHTML = ids.map((id) => `<option value="${esc(id)}">${id === "auto" ? "Auto (grid picks)" : esc(id)}</option>`).join("");
+    $("#chathint").innerHTML = "Grid · <b>Auto</b> lets the grid pick the best model. Runs in AIPG's environment, uses your API key.";
+  } else {
+    let list = [];
+    try { list = await invoke("ollama_models"); } catch (e) {}
+    sel.innerHTML = list.length
+      ? list.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")
+      : '<option value="">(no local models — pull one under “Run a worker”)</option>';
+    $("#chathint").textContent = "Local · runs on your own Ollama, fully offline and free.";
+  }
+  const last = get(src === "grid" ? "aipg_chatgrid" : "aipg_chatlocal");
+  if (last && [...sel.options].some((o) => o.value === last)) sel.value = last;
+}
+
+function addMsg(role, text, model) {
+  const el = document.createElement("div");
+  el.className = "msg " + (role === "user" ? "user" : "bot");
+  if (role !== "user" && model) {
+    const n = document.createElement("span"); n.className = "mname"; n.textContent = model; el.appendChild(n);
+  }
+  const body = document.createElement("span"); body.textContent = text; el.appendChild(body);
+  $("#chatlog").appendChild(el); $("#chatlog").scrollTop = 1e9;
+  return body;
+}
+
+async function chatSend() {
+  const ta = $("#chattext"), text = ta.value.trim(); if (!text) return;
+  const src = chatSource(), model = $("#chatmodel").value;
+  if (src === "grid" && !apiKey()) { toast("Erst API-Key in Settings speichern"); return show("settings"); }
+  if (src === "local" && !model) { toast("Kein lokales Modell — unter „Run a worker“ eines ziehen"); return; }
+  set(src === "grid" ? "aipg_chatgrid" : "aipg_chatlocal", model);
+
+  ta.value = ""; ta.style.height = "auto";
+  addMsg("user", text);
+  CHAT_MSGS.push({ role: "user", content: text });
+  const body = addMsg("bot", "▍", src === "grid" ? model : "local · " + model);
+
+  $("#chatsend").style.display = "none"; $("#chatstop").style.display = "";
+  CHAT_ABORT = new AbortController();
+
+  const url = (src === "grid" ? API : OLLAMA_LOCAL) + "/chat/completions";
+  const headers = { "Content-Type": "application/json" };
+  if (src === "grid") headers["Authorization"] = "Bearer " + apiKey();
+  const payload = { model, messages: CHAT_MSGS, stream: true };
+  if (/qwen3|gpt-oss|auto|deepseek|qwen38/i.test(model)) payload.max_tokens = 2048; // reasoning headroom
+
+  let acc = "", think = "";
+  try {
+    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload), signal: CHAT_ABORT.signal });
+    if (!r.ok) { let d = ""; try { d = (await r.json()).detail || ""; } catch (e) {} throw new Error("HTTP " + r.status + (d ? ": " + d : "")); }
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        let line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (!line.startsWith("data:")) continue;
+        line = line.slice(5).trim();
+        if (line === "[DONE]") { buf = ""; break; }
+        try {
+          const j = JSON.parse(line);
+          const delta = (j.choices && j.choices[0] && j.choices[0].delta) || {};
+          if (delta.content) { acc += delta.content; body.textContent = acc; }
+          if (delta.reasoning_content) think += delta.reasoning_content;
+          $("#chatlog").scrollTop = 1e9;
+        } catch (e) {}
+      }
+    }
+    if (!acc && think) acc = "(only reasoning returned) " + think.slice(0, 500);
+    if (!acc) acc = "(empty response)";
+    body.textContent = acc;
+    CHAT_MSGS.push({ role: "assistant", content: acc });
+  } catch (e) {
+    if (e.name === "AbortError") { body.textContent = acc + " …[stopped]"; CHAT_MSGS.push({ role: "assistant", content: acc }); }
+    else { body.textContent = "⚠ " + emsg(e); CHAT_MSGS.pop(); }
+  } finally {
+    $("#chatsend").style.display = ""; $("#chatstop").style.display = "none"; CHAT_ABORT = null;
+  }
+}
+
+function wireChat() {
+  CHAT_WIRED = true;
+  $$('input[name=chatsrc]').forEach((r) => (r.onchange = fillChatModels));
+  $("#chatmodel").onchange = () => set(chatSource() === "grid" ? "aipg_chatgrid" : "aipg_chatlocal", $("#chatmodel").value);
+  $("#chatsend").onclick = chatSend;
+  $("#chatstop").onclick = () => { if (CHAT_ABORT) CHAT_ABORT.abort(); };
+  $("#chatclear").onclick = () => { CHAT_MSGS = []; $("#chatlog").innerHTML = ""; };
+  const ta = $("#chattext");
+  ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; });
+  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend(); } });
+}
+
+function loadChat() { if (!CHAT_WIRED) wireChat(); fillChatModels(); }
 
 /* ---------- misc ---------- */
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -367,6 +506,7 @@ function show(view) {
   $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   if (view === "overview") loadOverview();
+  if (view === "chat") loadChat();
   if (view === "worker") loadWorker();
   if (view === "models") loadModels();
   if (view === "earnings") loadEarnings();

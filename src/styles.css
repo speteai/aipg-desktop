@@ -76,6 +76,31 @@ tbody tr:last-child td{border-bottom:none}
   background:var(--code);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:8px 11px}
 .hint{color:var(--mut);font-size:.82rem;margin:8px 0 0}
 
+/* advanced disclosure */
+details.adv{margin:18px 0;border:1px solid var(--bd);border-radius:11px;background:var(--panel);padding:0 14px}
+details.adv>summary{cursor:pointer;padding:12px 0;color:var(--mut);font-weight:600;list-style:none}
+details.adv>summary::-webkit-details-marker{display:none}
+details.adv>summary::before{content:"▸ ";color:var(--acc2)}
+details.adv[open]>summary::before{content:"▾ "}
+
+/* chat */
+.chatbar{display:flex;align-items:center;gap:8px;margin:6px 0 2px;flex-wrap:wrap}
+.seg{display:inline-flex;align-items:center;gap:5px;background:var(--panel2);border:1px solid var(--bd);
+  border-radius:8px;padding:6px 11px;cursor:pointer;font-size:.86rem}
+.seg input{accent-color:var(--acc2)}
+.sel{font:inherit;background:var(--code);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:7px 10px}
+.chatlog{margin:12px 0;display:flex;flex-direction:column;gap:12px;min-height:160px}
+.msg{max-width:min(680px,92%);padding:10px 14px;border-radius:12px;white-space:pre-wrap;word-break:break-word;
+  user-select:text;-webkit-user-select:text;line-height:1.55}
+.msg.user{align-self:flex-end;background:var(--acc2);color:#04121c}
+:root[data-theme="light"] .msg.user{color:#fff}
+.msg.bot{align-self:flex-start;background:var(--panel);border:1px solid var(--bd)}
+.msg.bot .think{color:var(--mut);font-size:.85em;font-style:italic;display:block;margin-bottom:6px}
+.msg .mname{display:block;font-size:.7rem;color:var(--mut);margin-bottom:3px}
+.chatinput{display:flex;gap:8px;align-items:flex-end;position:sticky;bottom:0;background:var(--bg);padding-top:8px}
+.chatinput textarea{flex:1;font:inherit;background:var(--code);color:var(--fg);border:1px solid var(--bd);
+  border-radius:10px;padding:10px 12px;resize:none;max-height:180px;user-select:text;-webkit-user-select:text}
+
 /* worker: progress bar + log */
 .pbar{height:8px;background:var(--chip);border:1px solid var(--bd);border-radius:999px;
   overflow:hidden;margin-top:10px}

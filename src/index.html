@@ -10,6 +10,7 @@
   <nav class="side">
     <div class="brand"><span class="bolt">⚡</span> AIPG</div>
     <button class="nav active" data-view="overview">Overview</button>
+    <button class="nav" data-view="chat">Chat</button>
     <button class="nav" data-view="worker">Run a worker</button>
     <button class="nav" data-view="models">Models</button>
     <button class="nav" data-view="earnings">Earnings</button>
@@ -31,6 +32,25 @@
       <p class="stamp" id="stamp"></p>
     </section>
 
+    <!-- CHAT -->
+    <section class="view" id="view-chat">
+      <header class="vh"><h1>Chat</h1></header>
+      <div class="chatbar">
+        <label class="seg" id="chatsrc-grid"><input type="radio" name="chatsrc" value="grid" checked> Grid</label>
+        <label class="seg" id="chatsrc-local"><input type="radio" name="chatsrc" value="local"> Local</label>
+        <select id="chatmodel" class="sel"></select>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="chatclear">New chat</button>
+      </div>
+      <p class="hint" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
+      <div id="chatlog" class="chatlog"></div>
+      <div class="chatinput">
+        <textarea id="chattext" rows="1" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+        <button class="btn" id="chatsend">Send</button>
+        <button class="btn ghost" id="chatstop" style="display:none">Stop</button>
+      </div>
+    </section>
+
     <!-- WORKER -->
     <section class="view" id="view-worker">
       <header class="vh"><h1>Run a worker</h1><span id="wstatus" class="chip">idle</span></header>
@@ -39,6 +59,20 @@
 
       <div id="wunsupported" class="banner" style="display:none"></div>
 
+      <!-- one-click -->
+      <div class="field" style="max-width:none">
+        <div class="row">
+          <input id="wname2" type="text" placeholder="Worker name (as enrolled in Console)" autocomplete="off" spellcheck="false">
+          <input id="wmodel2" type="text" placeholder="qwen3:8b" autocomplete="off" spellcheck="false" list="wmodels-list">
+          <button class="btn" id="btn-auto">▶ Start worker (automatic)</button>
+          <button class="btn ghost" id="btn-stop2" disabled>■ Stop</button>
+        </div>
+        <p class="hint">One click: starts Ollama, downloads the worker if needed, pulls the model, then runs.
+          Uses the API key from <b>Settings</b>. Stop your Docker worker first if it shares this name.</p>
+      </div>
+
+      <details class="adv">
+        <summary>Advanced steps &amp; troubleshooting</summary>
       <!-- step 1: prerequisites -->
       <h2 class="sec">1 · Prerequisites</h2>
       <div class="cards">
@@ -87,6 +121,8 @@
           <button class="btn ghost" id="btn-stop" disabled>■ Stop</button>
         </div>
       </div>
+      </details>
+
       <div class="vh" style="margin-top:22px">
         <h2 class="sec" style="margin:0">Log</h2>
         <button class="btn ghost" id="btn-copylog">Copy</button>
