@@ -213,6 +213,8 @@ const invoke = (cmd, args) =>
   TAURI.core && TAURI.core.invoke ? TAURI.core.invoke(cmd, args) : Promise.reject(new Error("not-in-app"));
 const listen = (ev, cb) =>
   TAURI.event && TAURI.event.listen ? TAURI.event.listen(ev, cb) : Promise.resolve(() => {});
+// Tauri command errors arrive as plain strings, not Error objects.
+const emsg = (e) => (e && typeof e === "object" && e.message) ? e.message : (e == null ? "unbekannter Fehler" : String(e));
 
 let WORKER_WIRED = false, WORKER_RUNNING = false;
 
@@ -265,7 +267,7 @@ async function loadWorker() {
   $("#wname").value = get("aipg_wname") || "";
   $("#wmodel").value = get("aipg_wmodel") || "qwen3:8b";
   if (!WORKER_WIRED) wireWorker();
-  try { renderPrereqs(await invoke("prereqs")); } catch (e) { toast("prereqs: " + e.message); }
+  try { renderPrereqs(await invoke("prereqs")); } catch (e) { toast("prereqs: " + emsg(e)); }
   try { WORKER_RUNNING = await invoke("worker_running"); } catch (e) {}
   syncRunButtons();
   refreshOllamaModels();
@@ -299,14 +301,14 @@ function wireWorker() {
   $("#btn-ollama").onclick = async () => {
     $("#btn-ollama").disabled = true; wsetStatus("starting Ollama…", "warn");
     try { await invoke("ollama_ensure"); toast("Ollama läuft"); }
-    catch (e) { toast(e.message); }
+    catch (e) { toast(emsg(e)); }
     renderPrereqs(await invoke("prereqs")); refreshOllamaModels(); syncRunButtons();
   };
 
   $("#btn-download").onclick = async () => {
     $("#btn-download").disabled = true; bar("#dlbar", 0);
     try { await invoke("download_worker"); toast("Worker heruntergeladen & verifiziert"); }
-    catch (e) { toast(e.message); logLine("[download] " + e.message); }
+    catch (e) { toast(emsg(e)); logLine("[download] " + emsg(e)); }
     $("#dlbar").style.display = "none";
     renderPrereqs(await invoke("prereqs")); syncRunButtons();
   };
@@ -316,7 +318,7 @@ function wireWorker() {
     set("aipg_wmodel", model);
     $("#btn-pull").disabled = true; bar("#pullbar", 0); $("#pullmsg").textContent = "contacting Ollama…";
     try { await invoke("ollama_ensure"); await invoke("ollama_pull", { model }); toast("Modell bereit"); }
-    catch (e) { toast(e.message); $("#pullmsg").textContent = "Fehler: " + e.message; }
+    catch (e) { toast(emsg(e)); $("#pullmsg").textContent = "Fehler: " + emsg(e); }
     $("#btn-pull").disabled = false; refreshOllamaModels();
   };
 
@@ -331,7 +333,7 @@ function wireWorker() {
       await invoke("ollama_ensure");
       await invoke("worker_start", { cfg: { api_key, model, worker_name } });
       WORKER_RUNNING = true; syncRunButtons();
-    } catch (e) { toast(e.message); logLine("[start] " + e.message); syncRunButtons(); }
+    } catch (e) { toast(emsg(e)); logLine("[start] " + emsg(e)); syncRunButtons(); }
   };
 
   $("#btn-stop").onclick = async () => {
