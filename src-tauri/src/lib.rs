@@ -13,7 +13,9 @@ pub fn run() {
         .manage(procs.clone())
         .invoke_handler(tauri::generate_handler![
             worker::prereqs,
+            worker::hardware,
             worker::download_worker,
+            worker::setup_ollama,
             worker::ollama_ensure,
             worker::ollama_models,
             worker::ollama_pull,

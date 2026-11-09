@@ -1,6 +1,8 @@
-//! All-in-one worker orchestration: verified download of the official
-//! grid-inference-worker binary, Ollama lifecycle, and worker process
-//! supervision with log streaming to the UI.
+//! All-in-one orchestration:
+//! - verified download of the official grid-inference-worker binary
+//! - managed, sandboxed Ollama (download + run, no system install)
+//! - hardware detection + model recommendation
+//! - worker process supervision with log streaming
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -10,15 +12,15 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 const WORKER_TAG: &str = "v0.3.12";
-const REPO: &str = "AIPowerGrid/grid-text-worker";
+const WORKER_REPO: &str = "AIPowerGrid/grid-text-worker";
 const OLLAMA: &str = "http://127.0.0.1:11434";
+const OLLAMA_TAG: &str = "v0.40.15";
 
-/// Running child processes, owned by the app and killed on exit.
 #[derive(Default)]
 pub struct Procs {
     worker: Mutex<Option<Child>>,
@@ -29,8 +31,47 @@ fn e<T: std::fmt::Display>(x: T) -> String {
     x.to_string()
 }
 
-/// (asset file name, is_zip). None => this OS/arch has no official binary.
-fn asset_for_target() -> Option<(&'static str, bool)> {
+/* ------------------------- paths ------------------------- */
+
+fn data_dir(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+}
+fn worker_dir(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("worker")
+}
+fn worker_bin(app: &AppHandle) -> PathBuf {
+    let name = if cfg!(windows) {
+        "grid-inference-worker.exe"
+    } else {
+        "grid-inference-worker"
+    };
+    worker_dir(app).join(name)
+}
+fn ollama_root(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("ollama")
+}
+fn ollama_dist(app: &AppHandle) -> PathBuf {
+    ollama_root(app).join("dist")
+}
+fn ollama_models_dir(app: &AppHandle) -> PathBuf {
+    ollama_root(app).join("models")
+}
+/// First existing managed ollama executable, if any.
+fn managed_ollama_bin(app: &AppHandle) -> Option<PathBuf> {
+    let d = ollama_dist(app);
+    let names: &[&str] = if cfg!(windows) {
+        &["ollama.exe", "bin/ollama.exe"]
+    } else {
+        &["ollama", "bin/ollama"]
+    };
+    names.iter().map(|n| d.join(n)).find(|p| p.exists())
+}
+
+/* ------------------------- worker binary ------------------------- */
+
+fn worker_asset() -> Option<(&'static str, bool)> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Some(("grid-inference-worker-linux-x64", false)),
         ("linux", "aarch64") => Some(("grid-inference-worker-linux-arm64", false)),
@@ -40,36 +81,18 @@ fn asset_for_target() -> Option<(&'static str, bool)> {
     }
 }
 
-fn worker_dir(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
-        .join("worker")
-}
-
-fn worker_bin(app: &AppHandle) -> PathBuf {
-    let name = if cfg!(windows) {
-        "grid-inference-worker.exe"
-    } else {
-        "grid-inference-worker"
-    };
-    worker_dir(app).join(name)
-}
-
 async fn ollama_up() -> bool {
-    match reqwest::Client::new()
-        .get(format!("{OLLAMA}/api/version"))
-        .timeout(std::time::Duration::from_secs(2))
-        .send()
-        .await
-    {
-        Ok(r) => r.status().is_success(),
-        Err(_) => false,
-    }
+    matches!(
+        reqwest::Client::new()
+            .get(format!("{OLLAMA}/api/version"))
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await,
+        Ok(r) if r.status().is_success()
+    )
 }
 
-/// Is the `ollama` command on PATH? Checked by trying to run it.
-async fn ollama_installed() -> bool {
+async fn system_ollama() -> bool {
     Command::new("ollama")
         .arg("--version")
         .stdout(Stdio::null())
@@ -86,37 +109,36 @@ pub struct Prereqs {
     arch: String,
     supported: bool,
     worker_downloaded: bool,
-    ollama_installed: bool,
     ollama_running: bool,
+    ollama_installed: bool,
+    ollama_managed: bool,
 }
 
 #[tauri::command]
 pub async fn prereqs(app: AppHandle) -> Prereqs {
     let running = ollama_up().await;
+    let managed = managed_ollama_bin(&app).is_some();
     Prereqs {
         os: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
-        supported: asset_for_target().is_some(),
+        supported: worker_asset().is_some(),
         worker_downloaded: worker_bin(&app).exists(),
-        ollama_installed: running || ollama_installed().await,
         ollama_running: running,
+        ollama_installed: running || managed || system_ollama().await,
+        ollama_managed: managed,
     }
 }
 
-/// Download the official worker binary for this platform, verify its SHA-256
-/// against the release manifest, unpack if needed, and make it executable.
 #[tauri::command]
 pub async fn download_worker(app: AppHandle) -> Result<String, String> {
-    let (asset, is_zip) = asset_for_target()
+    let (asset, is_zip) = worker_asset()
         .ok_or("Dein Betriebssystem/Architektur wird vom offiziellen Worker (v0.3.12) nicht abgedeckt.")?;
-
-    let base = format!("https://github.com/{REPO}/releases/download/{WORKER_TAG}");
+    let base = format!("https://github.com/{WORKER_REPO}/releases/download/{WORKER_TAG}");
     let client = reqwest::Client::builder()
         .user_agent("aipg-desktop")
         .build()
         .map_err(e)?;
 
-    // 1. manifest with per-asset sha256 + size
     let manifest: serde_json::Value = client
         .get(format!("{base}/worker-release.json"))
         .send()
@@ -135,7 +157,6 @@ pub async fn download_worker(app: AppHandle) -> Result<String, String> {
         return Err("Kein SHA256 im Manifest — Abbruch aus Sicherheitsgründen.".into());
     }
 
-    // 2. stream download, hashing as we go
     let resp = client.get(format!("{base}/{asset}")).send().await.map_err(e)?;
     if !resp.status().is_success() {
         return Err(format!("Download fehlgeschlagen: HTTP {}", resp.status()));
@@ -149,54 +170,37 @@ pub async fn download_worker(app: AppHandle) -> Result<String, String> {
         hasher.update(&chunk);
         buf.extend_from_slice(&chunk);
         received += chunk.len() as u64;
-        let _ = app.emit(
-            "worker-dl",
-            serde_json::json!({ "received": received, "total": total }),
-        );
+        let _ = app.emit("worker-dl", serde_json::json!({ "received": received, "total": total }));
     }
-
-    // 3. verify
     let got = hex::encode(hasher.finalize());
     if got != want_sha {
         return Err(format!(
-            "SHA256 stimmt nicht überein (erwartet {}…, erhalten {}…) — Datei verworfen.",
+            "SHA256 stimmt nicht überein (erwartet {}…, erhalten {}…) — verworfen.",
             &want_sha[..12.min(want_sha.len())],
             &got[..12.min(got.len())]
         ));
     }
 
-    // 4. place binary
     let dir = worker_dir(&app);
     std::fs::create_dir_all(&dir).map_err(e)?;
     let bin = worker_bin(&app);
     if is_zip {
-        extract_binary_from_zip(&buf, &bin)?;
+        extract_single_from_zip(&buf, &bin)?;
     } else {
         std::fs::write(&bin, &buf).map_err(e)?;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&bin).map_err(e)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&bin, perms).map_err(e)?;
-    }
+    make_executable(&bin)?;
     Ok(bin.to_string_lossy().into_owned())
 }
 
-/// Extract the single executable from a release .zip (largest regular file).
-fn extract_binary_from_zip(bytes: &[u8], dest: &PathBuf) -> Result<(), String> {
+fn extract_single_from_zip(bytes: &[u8], dest: &PathBuf) -> Result<(), String> {
     let reader = std::io::Cursor::new(bytes);
     let mut zip = zip::ZipArchive::new(reader).map_err(e)?;
     let mut best: Option<(String, u64)> = None;
     for i in 0..zip.len() {
         let f = zip.by_index(i).map_err(e)?;
-        if f.is_file() {
-            let name = f.name().to_string();
-            let size = f.size();
-            if best.as_ref().map(|(_, s)| size > *s).unwrap_or(true) {
-                best = Some((name, size));
-            }
+        if f.is_file() && best.as_ref().map(|(_, s)| f.size() > *s).unwrap_or(true) {
+            best = Some((f.name().to_string(), f.size()));
         }
     }
     let (name, _) = best.ok_or("Zip enthält keine Datei.")?;
@@ -206,25 +210,178 @@ fn extract_binary_from_zip(bytes: &[u8], dest: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-/// Start `ollama serve` if it is not already answering, and wait until it is.
+fn make_executable(_p: &PathBuf) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(_p).map_err(e)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(_p, perms).map_err(e)?;
+    }
+    Ok(())
+}
+
+/* ------------------------- managed Ollama ------------------------- */
+
+#[derive(Clone, Copy)]
+enum Arch {
+    Tgz,
+    Zst,
+    Zip,
+}
+
+fn ollama_asset() -> Option<(&'static str, Arch)> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", _) => Some(("ollama-darwin.tgz", Arch::Tgz)),
+        ("linux", "x86_64") => Some(("ollama-linux-amd64.tar.zst", Arch::Zst)),
+        ("linux", "aarch64") => Some(("ollama-linux-arm64.tar.zst", Arch::Zst)),
+        ("windows", "x86_64") => Some(("ollama-windows-amd64.zip", Arch::Zip)),
+        ("windows", "aarch64") => Some(("ollama-windows-arm64.zip", Arch::Zip)),
+        _ => None,
+    }
+}
+
+/// Download the official Ollama for this platform (verified), unpack it into the
+/// app's data dir, and make it runnable — no system install, no admin rights.
+#[tauri::command]
+pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
+    if managed_ollama_bin(&app).is_some() {
+        return Ok("already".into());
+    }
+    let (asset, kind) = ollama_asset().ok_or("Ollama wird für dieses OS/Arch nicht angeboten.")?;
+    let base = format!("https://github.com/ollama/ollama/releases/download/{OLLAMA_TAG}");
+    let client = reqwest::Client::builder()
+        .user_agent("aipg-desktop")
+        .build()
+        .map_err(e)?;
+
+    // expected sha from the release checksum file
+    let sums = client
+        .get(format!("{base}/sha256sum.txt"))
+        .send()
+        .await
+        .map_err(e)?
+        .text()
+        .await
+        .map_err(e)?;
+    let want_sha = sums
+        .lines()
+        .find(|l| l.trim_end().ends_with(asset))
+        .and_then(|l| l.split_whitespace().next())
+        .map(|s| s.to_lowercase())
+        .ok_or("Checksumme für Ollama-Asset nicht gefunden.")?;
+
+    let root = ollama_root(&app);
+    std::fs::create_dir_all(&root).map_err(e)?;
+    let tmp = root.join("download.part");
+
+    // stream to disk (archives are up to ~1.5 GB — never buffer in RAM)
+    let resp = client.get(format!("{base}/{asset}")).send().await.map_err(e)?;
+    if !resp.status().is_success() {
+        return Err(format!("Ollama-Download fehlgeschlagen: HTTP {}", resp.status()));
+    }
+    let total = resp.content_length().unwrap_or(0);
+    let mut file = tokio::fs::File::create(&tmp).await.map_err(e)?;
+    let mut hasher = Sha256::new();
+    let mut received: u64 = 0;
+    let mut last_emit: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(e)?;
+        hasher.update(&chunk);
+        file.write_all(&chunk).await.map_err(e)?;
+        received += chunk.len() as u64;
+        if received - last_emit > 2_000_000 {
+            last_emit = received;
+            let _ = app.emit("ollama-dl", serde_json::json!({ "received": received, "total": total }));
+        }
+    }
+    file.flush().await.map_err(e)?;
+    drop(file);
+    let _ = app.emit("ollama-dl", serde_json::json!({ "received": received, "total": total }));
+
+    let got = hex::encode(hasher.finalize());
+    if got != want_sha {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "Ollama-SHA256 stimmt nicht (erwartet {}…) — verworfen.",
+            &want_sha[..12.min(want_sha.len())]
+        ));
+    }
+
+    // extract on a blocking thread
+    let dist = ollama_dist(&app);
+    let tmp2 = tmp.clone();
+    let _ = app.emit("ollama-dl", serde_json::json!({ "status": "extracting" }));
+    tokio::task::spawn_blocking(move || extract_archive(&tmp2, &dist, kind))
+        .await
+        .map_err(e)??;
+    let _ = std::fs::remove_file(&tmp);
+
+    let bin = managed_ollama_bin(&app)
+        .ok_or("Entpackt, aber keine ollama-Binary gefunden.")?;
+    make_executable(&bin)?;
+    Ok(bin.to_string_lossy().into_owned())
+}
+
+fn extract_archive(archive: &PathBuf, dist: &PathBuf, kind: Arch) -> Result<(), String> {
+    let _ = std::fs::remove_dir_all(dist);
+    std::fs::create_dir_all(dist).map_err(e)?;
+    let f = std::fs::File::open(archive).map_err(e)?;
+    match kind {
+        Arch::Tgz => {
+            let gz = flate2::read::GzDecoder::new(f);
+            tar::Archive::new(gz).unpack(dist).map_err(e)?;
+        }
+        Arch::Zst => {
+            let zd = zstd::stream::read::Decoder::new(f).map_err(e)?;
+            tar::Archive::new(zd).unpack(dist).map_err(e)?;
+        }
+        Arch::Zip => {
+            let mut zip = zip::ZipArchive::new(f).map_err(e)?;
+            zip.extract(dist).map_err(e)?;
+        }
+    }
+    Ok(())
+}
+
+/// Start Ollama if it is not already answering (managed binary preferred).
 #[tauri::command]
 pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Result<(), String> {
     if ollama_up().await {
         return Ok(());
     }
-    if !ollama_installed().await {
-        return Err("Ollama ist nicht installiert. Installiere es von https://ollama.com/download und starte neu.".into());
-    }
-    let child = Command::new("ollama")
-        .arg("serve")
+    let bin = if let Some(b) = managed_ollama_bin(&app) {
+        b
+    } else if system_ollama().await {
+        PathBuf::from("ollama")
+    } else {
+        return Err("Ollama ist nicht eingerichtet. Klicke „Set up Ollama“ (lädt es automatisch).".into());
+    };
+
+    let models = ollama_models_dir(&app);
+    std::fs::create_dir_all(&models).map_err(e)?;
+    let mut cmd = Command::new(&bin);
+    cmd.arg("serve")
+        .env("OLLAMA_HOST", "127.0.0.1:11434")
+        .env("OLLAMA_MODELS", &models)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    #[cfg(target_os = "linux")]
+    {
+        let lib = ollama_dist(&app).join("lib/ollama");
+        if lib.exists() {
+            let prev = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+            cmd.env("LD_LIBRARY_PATH", format!("{}:{}", lib.display(), prev));
+        }
+    }
+    let child = cmd
         .spawn()
-        .map_err(|x| format!("Konnte 'ollama serve' nicht starten: {x}"))?;
+        .map_err(|x| format!("Konnte Ollama nicht starten: {x}"))?;
     *state.ollama.lock().await = Some(child);
-    // poll up to ~20s
-    for _ in 0..40 {
+
+    for _ in 0..60 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         if ollama_up().await {
             let _ = app.emit("ollama-ready", true);
@@ -234,7 +391,6 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
     Err("Ollama gestartet, antwortet aber nicht auf Port 11434.".into())
 }
 
-/// Models already pulled into the local Ollama.
 #[tauri::command]
 pub async fn ollama_models() -> Result<Vec<String>, String> {
     let v: serde_json::Value = reqwest::Client::new()
@@ -247,15 +403,10 @@ pub async fn ollama_models() -> Result<Vec<String>, String> {
         .map_err(e)?;
     Ok(v["models"]
         .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|m| m["name"].as_str().map(String::from))
-                .collect()
-        })
+        .map(|a| a.iter().filter_map(|m| m["name"].as_str().map(String::from)).collect())
         .unwrap_or_default())
 }
 
-/// Pull a model, streaming progress to the UI via `ollama-pull` events.
 #[tauri::command]
 pub async fn ollama_pull(app: AppHandle, model: String) -> Result<(), String> {
     let resp = reqwest::Client::new()
@@ -287,6 +438,87 @@ pub async fn ollama_pull(app: AppHandle, model: String) -> Result<(), String> {
     Ok(())
 }
 
+/* ------------------------- hardware ------------------------- */
+
+#[derive(Serialize)]
+pub struct Hardware {
+    ram_gb: f64,
+    cpu: String,
+    gpu: String,
+    can_run_worker: bool,
+    recommend: String,
+    note: String,
+}
+
+#[tauri::command]
+pub async fn hardware() -> Hardware {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    sys.refresh_cpu_all();
+    let ram_gb = sys.total_memory() as f64 / 1_073_741_824.0;
+    let cpu = sys
+        .cpus()
+        .first()
+        .map(|c| c.brand().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| std::env::consts::ARCH.to_string());
+
+    // GPU: NVIDIA via nvidia-smi, Apple Silicon = Metal
+    let (gpu, vram_gb) = detect_gpu().await;
+
+    // recommendation by the larger of VRAM (if a real GPU) or RAM
+    let budget = if vram_gb >= 4.0 { vram_gb.max(ram_gb * 0.6) } else { ram_gb };
+    let (recommend, can_run_worker, note) = if budget < 3.0 {
+        (
+            String::new(),
+            false,
+            "Zu wenig Speicher für einen lokalen Worker. Nutze stattdessen den Chat mit „Grid / Auto“ — die Berechnung läuft dann remote auf dem Grid, nicht auf diesem Gerät.".into(),
+        )
+    } else if budget < 6.0 {
+        ("llama3.2:1b".into(), true, "Kleines Modell für knappen Speicher.".into())
+    } else if budget < 10.0 {
+        ("llama3.2:3b".into(), true, "Solides kleines Modell.".into())
+    } else if budget < 20.0 {
+        ("qwen3:8b".into(), true, "Guter Allrounder.".into())
+    } else {
+        ("qwen3:14b".into(), true, "Reichlich Speicher — größeres Modell möglich.".into())
+    };
+
+    Hardware {
+        ram_gb: (ram_gb * 10.0).round() / 10.0,
+        cpu,
+        gpu,
+        can_run_worker,
+        recommend,
+        note,
+    }
+}
+
+async fn detect_gpu() -> (String, f64) {
+    if std::env::consts::OS == "macos" && std::env::consts::ARCH == "aarch64" {
+        return ("Apple Silicon (Metal)".into(), 0.0);
+    }
+    if let Ok(out) = Command::new("nvidia-smi")
+        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .output()
+        .await
+    {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = s.lines().next() {
+                let parts: Vec<&str> = line.split(',').map(|x| x.trim()).collect();
+                if parts.len() >= 2 {
+                    let mb: f64 = parts[1].parse().unwrap_or(0.0);
+                    return (format!("{} ({:.0} GB)", parts[0], mb / 1024.0), mb / 1024.0);
+                }
+            }
+        }
+    }
+    ("none detected (CPU)".into(), 0.0)
+}
+
+/* ------------------------- worker process ------------------------- */
+
 #[derive(Deserialize)]
 pub struct WorkerCfg {
     api_key: String,
@@ -294,7 +526,6 @@ pub struct WorkerCfg {
     worker_name: String,
 }
 
-/// Spawn the worker binary headless and stream its stdout/stderr as `worker-log`.
 #[tauri::command]
 pub async fn worker_start(
     app: AppHandle,
@@ -334,7 +565,6 @@ pub async fn worker_start(
     let mut child = cmd
         .spawn()
         .map_err(|x| format!("Worker-Start fehlgeschlagen: {x}"))?;
-
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     *state.worker.lock().await = Some(child);
@@ -349,7 +579,6 @@ pub async fn worker_start(
     Ok(())
 }
 
-/// Read a child stream line by line and forward to the UI; emit exit on EOF.
 fn pump<R>(app: AppHandle, reader: R, is_err: bool)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -359,7 +588,6 @@ where
         while let Ok(Some(line)) = lines.next_line().await {
             let _ = app.emit("worker-log", line);
         }
-        // stdout EOF means the process ended
         if !is_err {
             let _ = app.emit("worker-exit", true);
         }
@@ -379,7 +607,6 @@ pub async fn worker_running(state: State<'_, Arc<Procs>>) -> Result<bool, String
     Ok(state.worker.lock().await.is_some())
 }
 
-/// Kill every child we started (called on app exit).
 pub async fn kill_all(procs: &Procs) {
     if let Some(mut c) = procs.worker.lock().await.take() {
         let _ = c.start_kill();

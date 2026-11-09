@@ -238,8 +238,10 @@ function renderPrereqs(p) {
 
   $("#ollama-state").innerHTML = p.ollama_running
     ? '<span class="chip run">running</span>'
-    : p.ollama_installed ? '<span class="chip warn">installed, stopped</span>' : '<span class="chip off">not installed</span>';
-  $("#btn-ollama").disabled = p.ollama_running || !p.ollama_installed;
+    : (p.ollama_managed || p.ollama_installed) ? '<span class="chip warn">ready, stopped</span>' : '<span class="chip off">not set up</span>';
+  $("#btn-setup-ollama").disabled = p.ollama_managed || p.ollama_running;
+  $("#btn-setup-ollama").textContent = p.ollama_managed ? "Ollama ready" : "Set up Ollama";
+  $("#btn-ollama").disabled = p.ollama_running || !(p.ollama_managed || p.ollama_installed);
 
   $("#worker-dl-state").innerHTML = p.worker_downloaded
     ? '<span class="chip run">downloaded</span>' : '<span class="chip">not downloaded</span>';
@@ -258,12 +260,30 @@ async function refreshOllamaModels() {
   } catch (e) {}
 }
 
+function renderHardware(h) {
+  $("#hwpanel").innerHTML =
+    `<span><span class="k">RAM</span> <b>${h.ram_gb} GB</b></span>` +
+    `<span><span class="k">CPU</span> <b>${esc(h.cpu)}</b></span>` +
+    `<span><span class="k">GPU</span> <b>${esc(h.gpu)}</b></span>` +
+    (h.recommend ? `<span><span class="k">Suggested model</span> <b>${esc(h.recommend)}</b></span>` : "");
+  if (!h.can_run_worker) {
+    const b = $("#hwfallback"); b.style.display = "";
+    b.innerHTML = esc(h.note) + ' <a href="#" id="gotochat"><b>Zum Grid-Chat →</b></a>';
+    const g = $("#gotochat"); if (g) g.onclick = (e) => { e.preventDefault(); show("chat"); };
+  } else {
+    $("#hwfallback").style.display = "none";
+    // prefill recommended model if the user hasn't chosen one
+    if (h.recommend && !get("aipg_wmodel")) { $("#wmodel2").value = h.recommend; $("#wmodel").value = h.recommend; }
+  }
+}
+
 async function loadWorker() {
   if (!TAURI.core) {
     $("#wunsupported").style.display = "";
     $("#wunsupported").textContent = "Dieser Bereich funktioniert nur in der installierten Desktop-App.";
     return;
   }
+  try { renderHardware(await invoke("hardware")); } catch (e) {}
   $("#wname").value = get("aipg_wname") || "";
   $("#wmodel").value = get("aipg_wmodel") || "qwen3:8b";
   $("#wname2").value = get("aipg_wname") || "";
@@ -299,8 +319,13 @@ async function autoStartWorker() {
   $("#wname").value = worker_name; $("#wmodel").value = model;
   $("#btn-auto").disabled = true; wsetStatus("starting…", "warn");
   try {
-    logLine("[auto] Ollama sicherstellen…"); await invoke("ollama_ensure");
-    const p = await invoke("prereqs");
+    let p = await invoke("prereqs");
+    if (!p.ollama_running && !p.ollama_managed && !p.ollama_installed) {
+      logLine("[auto] Ollama einrichten (einmaliger Download)…"); bar("#olbar", 0);
+      await invoke("setup_ollama"); $("#olbar").style.display = "none";
+    }
+    logLine("[auto] Ollama starten…"); await invoke("ollama_ensure");
+    p = await invoke("prereqs");
     if (!p.worker_downloaded) { logLine("[auto] Worker-Binary laden (SHA-256-geprüft)…"); bar("#dlbar", 0); await invoke("download_worker"); $("#dlbar").style.display = "none"; }
     logLine("[auto] Modell " + model + " bereitstellen…"); bar("#pullbar", 0); await invoke("ollama_pull", { model }); $("#pullbar").style.display = "none";
     logLine("[auto] Worker starten…");
@@ -320,6 +345,12 @@ function wireWorker() {
     const { received, total } = e.payload || {};
     if (total) bar("#dlbar", received / total);
   });
+  listen("ollama-dl", (e) => {
+    const { received, total, status } = e.payload || {};
+    if (status === "extracting") { $("#olmsg").textContent = "entpacke…"; bar("#olbar", 1); return; }
+    if (total) { bar("#olbar", received / total); $("#olmsg").textContent = `downloading Ollama… ${Math.round(received / 1e6)} / ${Math.round(total / 1e6)} MB`; }
+    else if (received) { bar("#olbar", 0.05); $("#olmsg").textContent = `downloading Ollama… ${Math.round(received / 1e6)} MB`; }
+  });
   listen("ollama-pull", (e) => {
     const j = e.payload || {};
     if (j.total && j.completed != null) bar("#pullbar", j.completed / j.total);
@@ -331,6 +362,14 @@ function wireWorker() {
     logLine("[desktop] worker beendet.");
     nativeNotify("Worker stopped", "The worker process exited.");
   });
+
+  $("#btn-setup-ollama").onclick = async () => {
+    $("#btn-setup-ollama").disabled = true; $("#olmsg").textContent = "vorbereiten…"; bar("#olbar", 0);
+    try { await invoke("setup_ollama"); $("#olmsg").textContent = "Ollama eingerichtet ✓"; toast("Ollama bereit"); }
+    catch (e) { $("#olmsg").textContent = "⚠ " + emsg(e); toast(emsg(e)); }
+    $("#olbar").style.display = "none";
+    renderPrereqs(await invoke("prereqs"));
+  };
 
   $("#btn-ollama").onclick = async () => {
     $("#btn-ollama").disabled = true; wsetStatus("starting Ollama…", "warn");
@@ -498,6 +537,63 @@ function wireChat() {
 
 function loadChat() { if (!CHAT_WIRED) wireChat(); fillChatModels(); }
 
+/* ---------- images (txt2img / img2img via grid) ---------- */
+let IMG_WIRED = false;
+function imgMode() { const r = document.querySelector('input[name=imgmode]:checked'); return r ? r.value : "txt2img"; }
+
+async function fillImgModels() {
+  const sel = $("#imgmodel");
+  try {
+    const r = await fetch(API + "/status/models", { headers: { "Accept": "application/json" } });
+    const list = await r.json();
+    const imgs = (Array.isArray(list) ? list : []).filter((m) => m.type === "image").map((m) => m.name);
+    sel.innerHTML = imgs.length
+      ? imgs.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("")
+      : '<option value="">(no image models online)</option>';
+  } catch (e) { sel.innerHTML = '<option value="">(could not load)</option>'; }
+}
+
+function fileToDataURL(f) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+}
+
+async function imgGenerate() {
+  const key = apiKey(); if (!key) { toast("Erst API-Key in Settings"); return show("settings"); }
+  const model = $("#imgmodel").value; if (!model) { toast("Kein Bildmodell verfügbar"); return; }
+  const prompt = $("#imgprompt").value.trim(); if (!prompt) { toast("Prompt eingeben"); return; }
+  const payload = { model, prompt, n: 1 };
+  if (imgMode() === "img2img") {
+    const f = $("#imgfile").files[0]; if (!f) { toast("Bild auswählen"); return; }
+    payload.image = await fileToDataURL(f);
+  }
+  $("#imggen").disabled = true; $("#imgmsg").textContent = "generating… (kann etwas dauern)"; $("#imgresult").innerHTML = "";
+  try {
+    const r = await fetch(API + "/images/generations", {
+      method: "POST", headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error((d && d.detail) || ("HTTP " + r.status));
+    const item = (d.data && d.data[0]) || {};
+    const src = item.url ? item.url : (item.b64_json ? "data:image/png;base64," + item.b64_json : "");
+    if (!src) throw new Error("Keine Bilddaten in der Antwort.");
+    const img = document.createElement("img"); img.src = src;
+    $("#imgresult").appendChild(img);
+    const a = document.createElement("a"); a.href = src; a.download = "aipg-image.png"; a.textContent = "Download"; a.className = "btn ghost";
+    $("#imgresult").appendChild(a);
+    if (item.revised_prompt) { const p = document.createElement("p"); p.className = "hint"; p.textContent = item.revised_prompt; $("#imgresult").appendChild(p); }
+    $("#imgmsg").textContent = "done";
+  } catch (e) { $("#imgmsg").textContent = "⚠ " + emsg(e); }
+  finally { $("#imggen").disabled = false; }
+}
+
+function wireImages() {
+  IMG_WIRED = true;
+  $$('input[name=imgmode]').forEach((r) => (r.onchange = () => { $("#imgsrcrow").style.display = imgMode() === "img2img" ? "" : "none"; }));
+  $("#imggen").onclick = imgGenerate;
+}
+function loadImages() { if (!IMG_WIRED) wireImages(); fillImgModels(); }
+
 /* ---------- misc ---------- */
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
@@ -507,6 +603,7 @@ function show(view) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   if (view === "overview") loadOverview();
   if (view === "chat") loadChat();
+  if (view === "images") loadImages();
   if (view === "worker") loadWorker();
   if (view === "models") loadModels();
   if (view === "earnings") loadEarnings();

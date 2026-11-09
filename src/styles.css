@@ -101,6 +101,15 @@ details.adv[open]>summary::before{content:"▾ "}
 .chatinput textarea{flex:1;font:inherit;background:var(--code);color:var(--fg);border:1px solid var(--bd);
   border-radius:10px;padding:10px 12px;resize:none;max-height:180px;user-select:text;-webkit-user-select:text}
 
+/* hardware panel */
+.hwpanel{display:flex;gap:18px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--bd);
+  border-radius:12px;padding:12px 16px;margin:12px 0;font-size:.86rem}
+.hwpanel b{color:var(--fg)} .hwpanel .k{color:var(--mut)}
+
+/* images */
+.imgresult{margin-top:16px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.imgresult img{max-width:100%;border-radius:12px;border:1px solid var(--bd)}
+
 /* worker: progress bar + log */
 .pbar{height:8px;background:var(--chip);border:1px solid var(--bd);border-radius:999px;
   overflow:hidden;margin-top:10px}
