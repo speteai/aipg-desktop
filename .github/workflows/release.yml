@@ -43,10 +43,15 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # signs the updater artifacts (in-app self-update)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'AIPG Desktop ${{ github.ref_name }}'
-          releaseBody: 'Download the installer for your OS below. Unsigned build — on first launch your OS may warn; choose "run anyway".'
+          releaseBody: 'Download the installer for your OS below. Unsigned build — on first launch your OS may warn; choose "run anyway". From v0.11.0 on, the app updates itself.'
           releaseDraft: false
           prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
