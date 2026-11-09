@@ -120,6 +120,8 @@ function renderWorkers(workers) {
 }
 
 async function loadModels() {
+  $("#models").innerHTML = '<p class="muted"><span class="spin"></span> Loading…</p>';
+  $("#imgmodels").innerHTML = '<p class="muted"><span class="spin"></span> Loading…</p>';
   try {
     const d = await api("/models", false);
     $("#models").innerHTML = (d.data || []).map((m) => {
@@ -228,6 +230,18 @@ function wsetStatus(txt, cls) { const c = $("#wstatus"); c.textContent = txt; c.
 function bar(sel, frac) {
   const b = $(sel); b.style.display = ""; b.firstElementChild.style.width = Math.max(0, Math.min(1, frac)) * 100 + "%";
 }
+/* always-visible worker step strip + progress */
+function setStep(step, state) {
+  const el = document.querySelector(`#wsteps .step[data-step="${step}"]`);
+  if (el) el.className = "step" + (state ? " " + state : "");
+}
+function resetSteps() { ["ollama", "worker", "model", "run"].forEach((s) => setStep(s, "")); }
+function wprog(frac, text) {
+  const b = $("#wpbar");
+  if (frac == null) b.style.display = "none";
+  else { b.style.display = ""; b.firstElementChild.style.width = Math.max(0, Math.min(1, frac)) * 100 + "%"; }
+  if (text != null) $("#wstatusline").textContent = text;
+}
 
 function renderPrereqs(p) {
   if (!p.supported) {
@@ -317,22 +331,35 @@ async function autoStartWorker() {
   const model = $("#wmodel2").value.trim() || "qwen3:8b";
   set("aipg_wname", worker_name); set("aipg_wmodel", model);
   $("#wname").value = worker_name; $("#wmodel").value = model;
-  $("#btn-auto").disabled = true; wsetStatus("starting…", "warn");
+  $("#btn-auto").disabled = true; wsetStatus("starting…", "warn"); resetSteps();
+  let step = "ollama";
   try {
     let p = await invoke("prereqs");
+    // 1 — Ollama
+    step = "ollama"; setStep("ollama", "active");
     if (!p.ollama_running && !p.ollama_managed && !p.ollama_installed) {
-      logLine("[auto] Ollama einrichten (einmaliger Download)…"); bar("#olbar", 0);
-      await invoke("setup_ollama"); $("#olbar").style.display = "none";
+      wprog(0, "Ollama herunterladen (einmalig)…"); logLine("[auto] Ollama einrichten…");
+      await invoke("setup_ollama");
     }
-    logLine("[auto] Ollama starten…"); await invoke("ollama_ensure");
+    wprog(null, "Ollama starten…"); await invoke("ollama_ensure");
+    setStep("ollama", "done");
+    // 2 — worker binary
+    step = "worker"; setStep("worker", "active");
     p = await invoke("prereqs");
-    if (!p.worker_downloaded) { logLine("[auto] Worker-Binary laden (SHA-256-geprüft)…"); bar("#dlbar", 0); await invoke("download_worker"); $("#dlbar").style.display = "none"; }
-    logLine("[auto] Modell " + model + " bereitstellen…"); bar("#pullbar", 0); await invoke("ollama_pull", { model }); $("#pullbar").style.display = "none";
-    logLine("[auto] Worker starten…");
+    if (!p.worker_downloaded) { wprog(0, "Worker-Binary laden (SHA-256-geprüft)…"); logLine("[auto] Worker-Binary laden…"); await invoke("download_worker"); }
+    setStep("worker", "done");
+    // 3 — model
+    step = "model"; setStep("model", "active");
+    wprog(0, "Modell " + model + " bereitstellen…"); logLine("[auto] Modell " + model + " ziehen…");
+    await invoke("ollama_pull", { model });
+    setStep("model", "done");
+    // 4 — run
+    step = "run"; setStep("run", "active"); wprog(null, "Worker starten…");
     await invoke("worker_start", { cfg: { api_key, model, worker_name } });
-    WORKER_RUNNING = true; toast("Worker läuft");
-  } catch (e) { toast(emsg(e)); logLine("[auto] Fehler: " + emsg(e)); }
-  finally {
+    WORKER_RUNNING = true; setStep("run", "done"); wprog(null, "Worker läuft ✓"); toast("Worker läuft");
+  } catch (e) {
+    setStep(step, "error"); wprog(null, "⚠ " + emsg(e)); logLine("[auto] Fehler: " + emsg(e)); toast(emsg(e));
+  } finally {
     try { renderPrereqs(await invoke("prereqs")); } catch (e) {}
     syncRunButtons();
   }
@@ -343,18 +370,21 @@ function wireWorker() {
 
   listen("worker-dl", (e) => {
     const { received, total } = e.payload || {};
-    if (total) bar("#dlbar", received / total);
+    setStep("worker", "active");
+    if (total) wprog(received / total, `Worker-Binary… ${Math.round(received / 1e6)} / ${Math.round(total / 1e6)} MB`);
   });
   listen("ollama-dl", (e) => {
     const { received, total, status } = e.payload || {};
-    if (status === "extracting") { $("#olmsg").textContent = "entpacke…"; bar("#olbar", 1); return; }
-    if (total) { bar("#olbar", received / total); $("#olmsg").textContent = `downloading Ollama… ${Math.round(received / 1e6)} / ${Math.round(total / 1e6)} MB`; }
-    else if (received) { bar("#olbar", 0.05); $("#olmsg").textContent = `downloading Ollama… ${Math.round(received / 1e6)} MB`; }
+    setStep("ollama", "active");
+    if (status === "extracting") { wprog(1, "Ollama entpacken…"); return; }
+    if (total) wprog(received / total, `Ollama laden… ${Math.round(received / 1e6)} / ${Math.round(total / 1e6)} MB`);
+    else if (received) wprog(0.05, `Ollama laden… ${Math.round(received / 1e6)} MB`);
   });
   listen("ollama-pull", (e) => {
     const j = e.payload || {};
-    if (j.total && j.completed != null) bar("#pullbar", j.completed / j.total);
-    if (j.status) $("#pullmsg").textContent = j.status;
+    setStep("model", "active");
+    const pct = (j.total && j.completed != null) ? j.completed / j.total : null;
+    wprog(pct, "Modell: " + (j.status || "pulling…"));
   });
   listen("worker-log", (e) => logLine(String(e.payload)));
   listen("worker-exit", () => {
@@ -364,34 +394,32 @@ function wireWorker() {
   });
 
   $("#btn-setup-ollama").onclick = async () => {
-    $("#btn-setup-ollama").disabled = true; $("#olmsg").textContent = "vorbereiten…"; bar("#olbar", 0);
-    try { await invoke("setup_ollama"); $("#olmsg").textContent = "Ollama eingerichtet ✓"; toast("Ollama bereit"); }
-    catch (e) { $("#olmsg").textContent = "⚠ " + emsg(e); toast(emsg(e)); }
-    $("#olbar").style.display = "none";
+    $("#btn-setup-ollama").disabled = true; setStep("ollama", "active"); wprog(0, "Ollama vorbereiten…");
+    try { await invoke("setup_ollama"); setStep("ollama", "done"); wprog(null, "Ollama eingerichtet ✓"); toast("Ollama bereit"); }
+    catch (e) { setStep("ollama", "error"); wprog(null, "⚠ " + emsg(e)); toast(emsg(e)); }
     renderPrereqs(await invoke("prereqs"));
   };
 
   $("#btn-ollama").onclick = async () => {
-    $("#btn-ollama").disabled = true; wsetStatus("starting Ollama…", "warn");
-    try { await invoke("ollama_ensure"); toast("Ollama läuft"); }
-    catch (e) { toast(emsg(e)); }
+    $("#btn-ollama").disabled = true; setStep("ollama", "active"); wprog(null, "Ollama starten…");
+    try { await invoke("ollama_ensure"); setStep("ollama", "done"); wprog(null, "Ollama läuft"); toast("Ollama läuft"); }
+    catch (e) { setStep("ollama", "error"); wprog(null, "⚠ " + emsg(e)); toast(emsg(e)); }
     renderPrereqs(await invoke("prereqs")); refreshOllamaModels(); syncRunButtons();
   };
 
   $("#btn-download").onclick = async () => {
-    $("#btn-download").disabled = true; bar("#dlbar", 0);
-    try { await invoke("download_worker"); toast("Worker heruntergeladen & verifiziert"); }
-    catch (e) { toast(emsg(e)); logLine("[download] " + emsg(e)); }
-    $("#dlbar").style.display = "none";
+    $("#btn-download").disabled = true; setStep("worker", "active"); wprog(0, "Worker-Binary laden…");
+    try { await invoke("download_worker"); setStep("worker", "done"); wprog(null, "Worker-Binary bereit ✓"); toast("Worker heruntergeladen & verifiziert"); }
+    catch (e) { setStep("worker", "error"); wprog(null, "⚠ " + emsg(e)); logLine("[download] " + emsg(e)); toast(emsg(e)); }
     renderPrereqs(await invoke("prereqs")); syncRunButtons();
   };
 
   $("#btn-pull").onclick = async () => {
     const model = $("#wmodel").value.trim(); if (!model) return toast("Modell-Tag eingeben");
     set("aipg_wmodel", model);
-    $("#btn-pull").disabled = true; bar("#pullbar", 0); $("#pullmsg").textContent = "contacting Ollama…";
-    try { await invoke("ollama_ensure"); await invoke("ollama_pull", { model }); toast("Modell bereit"); }
-    catch (e) { toast(emsg(e)); $("#pullmsg").textContent = "Fehler: " + emsg(e); }
+    $("#btn-pull").disabled = true; setStep("model", "active"); wprog(0, "Modell ziehen…");
+    try { await invoke("ollama_ensure"); await invoke("ollama_pull", { model }); setStep("model", "done"); wprog(null, "Modell bereit ✓"); toast("Modell bereit"); }
+    catch (e) { setStep("model", "error"); wprog(null, "⚠ " + emsg(e)); toast(emsg(e)); }
     $("#btn-pull").disabled = false; refreshOllamaModels();
   };
 
@@ -488,11 +516,20 @@ function renderChatList() {
 async function fillChatModels() {
   const src = chatSource(), sel = $("#chatmodel");
   if (src === "grid") {
-    let ids = ["auto"];
+    let ids = ["auto"]; const price = {};
     try { const d = await api("/models", false); ids = (d.data || []).map((m) => m.id); } catch (e) {}
+    try {
+      const r = await fetch(API + "/status/models", { headers: { "Accept": "application/json" } });
+      const list = await r.json();
+      (Array.isArray(list) ? list : []).forEach((m) => { if (m.pricing) price[m.name] = m.pricing; });
+    } catch (e) {}
     ids.sort((a, b) => (a === "auto" ? -1 : b === "auto" ? 1 : 0));
-    sel.innerHTML = ids.map((id) => `<option value="${esc(id)}">${id === "auto" ? "Auto (grid picks)" : esc(id)}</option>`).join("");
-    $("#chathint").innerHTML = "Grid · <b>Auto</b> lets the grid pick the best model. Runs in AIPG's environment, uses your API key.";
+    sel.innerHTML = ids.map((id) => {
+      const p = price[id];
+      const tag = p ? ` · $${p.input_per_mtok_usd}/$${p.output_per_mtok_usd} /Mtok` : "";
+      return `<option value="${esc(id)}">${id === "auto" ? "Auto (grid picks)" : esc(id)}${esc(tag)}</option>`;
+    }).join("");
+    $("#chathint").innerHTML = "Grid · <b>Auto</b> lets the grid pick the best model. Prices are input/output per million tokens.";
   } else {
     let list = [];
     try { list = await invoke("ollama_models"); } catch (e) {}
@@ -749,6 +786,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const a = e.target.closest("[data-ext]");
     if (a) { e.preventDefault(); openExternal(a.dataset.ext); }
   });
+
+  // first-run onboarding
+  if (!apiKey() && get("aipg_onboarded") !== "1") {
+    $("#welcome").style.display = "";
+    setTimeout(() => $("#wc-key").focus(), 50);
+    $("#wc-save").onclick = () => {
+      const k = $("#wc-key").value.trim();
+      if (k) { set(LS.key, k); $("#key").value = k; }
+      set("aipg_onboarded", "1"); $("#welcome").style.display = "none"; startPolling();
+      show(k ? "overview" : "chat");
+    };
+    $("#wc-key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#wc-save").click(); });
+    $("#wc-skip").onclick = () => { set("aipg_onboarded", "1"); $("#welcome").style.display = "none"; };
+  }
 
   show("overview");
   startPolling();

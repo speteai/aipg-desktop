@@ -26,6 +26,15 @@ code{font-family:ui-monospace,Menlo,monospace;background:var(--code);border:1px 
   border-radius:8px;cursor:pointer}
 .nav:hover{background:var(--panel2);color:var(--fg)}
 .nav.active{background:var(--panel2);color:var(--fg);font-weight:600}
+.nav .ni{display:inline-block;width:1.2em;text-align:center;margin-right:6px;opacity:.85}
+.nav.active{box-shadow:inset 2px 0 0 var(--acc)}
+:focus-visible{outline:2px solid var(--acc2);outline-offset:2px;border-radius:6px}
+.btn:active{transform:translateY(1px)}
+
+/* onboarding overlay */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;
+  padding:20px;z-index:50}
+.welcomecard{max-width:460px;width:100%;padding:22px 24px}
 .spacer{flex:1}
 .conn{display:flex;align-items:center;gap:7px;font-size:.8rem;color:var(--mut);padding:8px 10px}
 .conn .dot{width:9px;height:9px;border-radius:50%;background:var(--mut)}
@@ -112,6 +121,18 @@ details.adv[open]>summary::before{content:"▾ "}
 .chatinput{display:flex;gap:8px;align-items:flex-end;position:sticky;bottom:0;background:var(--bg);padding-top:8px}
 .chatinput textarea{flex:1;font:inherit;background:var(--code);color:var(--fg);border:1px solid var(--bd);
   border-radius:10px;padding:10px 12px;resize:none;max-height:180px;user-select:text;-webkit-user-select:text}
+
+/* worker step strip */
+.steps{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 6px}
+.step{display:flex;align-items:center;gap:7px;font-size:.84rem;color:var(--mut);
+  background:var(--panel);border:1px solid var(--bd);border-radius:999px;padding:6px 13px}
+.step .dot{width:9px;height:9px;border-radius:50%;background:var(--bd);flex:0 0 auto}
+.step.active{color:var(--fg);border-color:var(--acc2)}
+.step.active .dot{background:var(--acc2);animation:pulse 1.1s ease-in-out infinite}
+.step.done{color:var(--fg);border-color:var(--acc)} .step.done .dot{background:var(--acc)}
+.step.error{color:var(--danger);border-color:var(--danger)} .step.error .dot{background:var(--danger)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.statusline{color:var(--mut);font-size:.85rem;margin:6px 0 0;min-height:1.2em}
 
 /* hardware panel */
 .hwpanel{display:flex;gap:18px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--bd);

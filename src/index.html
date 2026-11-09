@@ -9,13 +9,13 @@
 <body>
   <nav class="side">
     <div class="brand"><span class="bolt">⚡</span> AIPG</div>
-    <button class="nav active" data-view="overview">Overview</button>
-    <button class="nav" data-view="chat">Chat</button>
-    <button class="nav" data-view="images">Images</button>
-    <button class="nav" data-view="worker">Run a worker</button>
-    <button class="nav" data-view="models">Models</button>
-    <button class="nav" data-view="earnings">Earnings</button>
-    <button class="nav" data-view="settings">Settings</button>
+    <button class="nav active" data-view="overview"><span class="ni">▚</span> Overview</button>
+    <button class="nav" data-view="chat"><span class="ni">💬</span> Chat</button>
+    <button class="nav" data-view="images"><span class="ni">🖼</span> Images</button>
+    <button class="nav" data-view="worker"><span class="ni">⚙</span> Run a worker</button>
+    <button class="nav" data-view="models"><span class="ni">▦</span> Models</button>
+    <button class="nav" data-view="earnings"><span class="ni">◆</span> Earnings</button>
+    <button class="nav" data-view="settings"><span class="ni">⚙</span> Settings</button>
     <div class="spacer"></div>
     <div class="conn" id="conn"><span class="dot" id="conndot"></span><span id="connlabel">not connected</span></div>
   </nav>
@@ -111,6 +111,15 @@
         <p class="hint">One click: starts Ollama, downloads the worker if needed, pulls the model, then runs.
           Uses the API key from <b>Settings</b>. Stop your Docker worker first if it shares this name.</p>
       </div>
+
+      <div id="wsteps" class="steps">
+        <div class="step" data-step="ollama"><span class="dot"></span> Ollama</div>
+        <div class="step" data-step="worker"><span class="dot"></span> Worker binary</div>
+        <div class="step" data-step="model"><span class="dot"></span> Model</div>
+        <div class="step" data-step="run"><span class="dot"></span> Worker</div>
+      </div>
+      <div id="wpbar" class="pbar" style="display:none"><span></span></div>
+      <p class="statusline" id="wstatusline"></p>
 
       <details class="adv">
         <summary>Advanced steps &amp; troubleshooting</summary>
@@ -228,6 +237,23 @@
       </div>
     </section>
   </main>
+
+  <div id="welcome" class="overlay" style="display:none">
+    <div class="card welcomecard">
+      <div class="brand" style="padding:0 0 6px"><span class="bolt">⚡</span> Welcome to AIPG Desktop</div>
+      <p class="muted">Paste your Grid API key to get started. Chat works right away — running a worker is optional.</p>
+      <div class="row" style="margin:12px 0">
+        <input id="wc-key" type="password" placeholder="grid_…" autocomplete="off" spellcheck="false"
+          style="flex:1;min-width:220px;font:inherit;background:var(--code);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:9px 11px">
+      </div>
+      <p class="hint">No key yet? Get one from the AIPG Console.
+        <a href="#" data-ext="https://api.aipowergrid.io">Open Console →</a></p>
+      <div class="row" style="margin-top:14px;justify-content:flex-end">
+        <button class="btn ghost" id="wc-skip">Skip for now</button>
+        <button class="btn" id="wc-save">Save &amp; start</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" class="toast"></div>
   <script src="main.js"></script>

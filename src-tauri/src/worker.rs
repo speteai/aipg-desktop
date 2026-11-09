@@ -495,26 +495,144 @@ pub async fn hardware() -> Hardware {
 }
 
 async fn detect_gpu() -> (String, f64) {
-    if std::env::consts::OS == "macos" && std::env::consts::ARCH == "aarch64" {
-        return ("Apple Silicon (Metal)".into(), 0.0);
+    if let Some(x) = gpu_nvidia().await {
+        return x;
     }
-    if let Ok(out) = Command::new("nvidia-smi")
+    match std::env::consts::OS {
+        "macos" => gpu_macos().await,
+        "windows" => gpu_windows().await,
+        "linux" => gpu_linux().await,
+        _ => ("none detected (CPU)".into(), 0.0),
+    }
+}
+
+async fn gpu_nvidia() -> Option<(String, f64)> {
+    let out = Command::new("nvidia-smi")
         .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
         .output()
         .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    let line = s.lines().next()?;
+    let parts: Vec<&str> = line.split(',').map(|x| x.trim()).collect();
+    if parts.len() >= 2 {
+        let gb = parts[1].parse::<f64>().unwrap_or(0.0) / 1024.0;
+        return Some((format!("{} ({:.0} GB)", parts[0], gb), gb));
+    }
+    None
+}
+
+async fn gpu_macos() -> (String, f64) {
+    if let Ok(out) = Command::new("system_profiler")
+        .arg("SPDisplaysDataType")
+        .output()
+        .await
     {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            if let Some(line) = s.lines().next() {
-                let parts: Vec<&str> = line.split(',').map(|x| x.trim()).collect();
-                if parts.len() >= 2 {
-                    let mb: f64 = parts[1].parse().unwrap_or(0.0);
-                    return (format!("{} ({:.0} GB)", parts[0], mb / 1024.0), mb / 1024.0);
-                }
-            }
+        let s = String::from_utf8_lossy(&out.stdout);
+        let name = s
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("Chipset Model:"))
+            .map(|x| x.trim().to_string());
+        let gb = s
+            .lines()
+            .find_map(|l| {
+                let t = l.trim();
+                t.strip_prefix("VRAM (Total):")
+                    .or_else(|| t.strip_prefix("VRAM (Dynamic, Max):"))
+            })
+            .map(|x| parse_mem_gb(x.trim()))
+            .unwrap_or(0.0);
+        if let Some(n) = name {
+            let label = if std::env::consts::ARCH == "aarch64" {
+                format!("{n} (Metal)")
+            } else if gb > 0.0 {
+                format!("{n} ({gb:.0} GB)")
+            } else {
+                n
+            };
+            return (label, gb);
+        }
+    }
+    if std::env::consts::ARCH == "aarch64" {
+        return ("Apple Silicon (Metal)".into(), 0.0);
+    }
+    ("none detected (CPU)".into(), 0.0)
+}
+
+async fn gpu_windows() -> (String, f64) {
+    if let Ok(out) = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-CimInstance Win32_VideoController).Name",
+        ])
+        .output()
+        .await
+    {
+        let s = String::from_utf8_lossy(&out.stdout);
+        let names: Vec<String> = s
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !names.is_empty() {
+            return (names.join(", "), 0.0);
         }
     }
     ("none detected (CPU)".into(), 0.0)
+}
+
+async fn gpu_linux() -> (String, f64) {
+    let mut name = String::new();
+    if let Ok(out) = Command::new("sh")
+        .args(["-c", "lspci 2>/dev/null | grep -Ei 'vga|3d|display'"])
+        .output()
+        .await
+    {
+        let s = String::from_utf8_lossy(&out.stdout);
+        if let Some(line) = s.lines().next() {
+            if let Some(idx) = line.find(": ") {
+                name = line[idx + 2..].trim().to_string();
+            }
+        }
+    }
+    // AMD VRAM from sysfs, if present
+    let mut gb = 0.0;
+    for n in 0..4 {
+        let p = format!("/sys/class/drm/card{n}/device/mem_info_vram_total");
+        if let Ok(txt) = std::fs::read_to_string(&p) {
+            if let Ok(bytes) = txt.trim().parse::<f64>() {
+                gb = bytes / 1_073_741_824.0;
+                break;
+            }
+        }
+    }
+    if name.is_empty() {
+        return ("none detected (CPU)".into(), 0.0);
+    }
+    let label = if gb > 0.0 {
+        format!("{name} ({gb:.0} GB)")
+    } else {
+        name
+    };
+    (label, gb)
+}
+
+fn parse_mem_gb(s: &str) -> f64 {
+    let num: f64 = s
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0.0);
+    if s.to_lowercase().contains("mb") {
+        num / 1024.0
+    } else {
+        num
+    }
 }
 
 /* ------------------------- worker process ------------------------- */
