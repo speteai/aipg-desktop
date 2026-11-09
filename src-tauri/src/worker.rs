@@ -1073,6 +1073,141 @@ pub fn config_bool(app: &AppHandle, key: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+/* ------------------------- image gallery (local files) ------------------------- */
+
+fn images_dir(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("images")
+}
+fn images_index_path(app: &AppHandle) -> PathBuf {
+    images_dir(app).join("index.json")
+}
+fn images_load(app: &AppHandle) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(images_index_path(app))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+        .unwrap_or_default()
+}
+fn images_save(app: &AppHandle, list: &[serde_json::Value]) -> Result<(), String> {
+    std::fs::create_dir_all(images_dir(app)).map_err(e)?;
+    let p = images_index_path(app);
+    let tmp = p.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_vec(list).map_err(e)?).map_err(e)?;
+    std::fs::rename(&tmp, &p).map_err(e)
+}
+/// File extension + MIME type from the image's magic bytes.
+fn image_kind(b: &[u8]) -> (&'static str, &'static str) {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        ("jpg", "image/jpeg")
+    } else if b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        ("webp", "image/webp")
+    } else {
+        ("png", "image/png")
+    }
+}
+/// Resolve a gallery id to its file, via the index only (no path input).
+fn image_file(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+    let list = images_load(app);
+    let entry = list
+        .iter()
+        .find(|x| x["id"].as_str() == Some(id))
+        .ok_or("Image not found.")?;
+    let name = entry["file"].as_str().ok_or("Image not found.")?;
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("Invalid image entry.".into());
+    }
+    Ok(images_dir(app).join(name))
+}
+
+/// Persist a generated image (an https URL or a data: URL) into the local
+/// gallery together with its metadata. Returns the stored entry.
+#[tauri::command]
+pub async fn image_store(
+    app: AppHandle,
+    src: String,
+    meta: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine;
+    let bytes: Vec<u8> = if let Some(rest) = src.strip_prefix("data:") {
+        let b64 = rest.split_once(',').map(|x| x.1).ok_or("Malformed data URL.")?;
+        base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .map_err(e)?
+    } else if src.starts_with("https://") {
+        let r = reqwest::Client::builder()
+            .user_agent("aipg-desktop")
+            .build()
+            .map_err(e)?
+            .get(&src)
+            .send()
+            .await
+            .map_err(e)?;
+        if !r.status().is_success() {
+            return Err(format!("Could not download the image: HTTP {}", r.status()));
+        }
+        r.bytes().await.map_err(e)?.to_vec()
+    } else {
+        return Err("Unsupported image source.".into());
+    };
+    if bytes.is_empty() {
+        return Err("Empty image.".into());
+    }
+    let (ext, _) = image_kind(&bytes);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let mut list = images_load(&app);
+    let id = format!("{ts}{}", list.len() % 1000);
+    let file = format!("{id}.{ext}");
+    std::fs::create_dir_all(images_dir(&app)).map_err(e)?;
+    std::fs::write(images_dir(&app).join(&file), &bytes).map_err(e)?;
+    let mut entry = if meta.is_object() { meta } else { serde_json::json!({}) };
+    entry["id"] = serde_json::json!(id);
+    entry["file"] = serde_json::json!(file);
+    entry["ts"] = serde_json::json!(ts as u64);
+    entry["bytes"] = serde_json::json!(bytes.len());
+    list.insert(0, entry.clone());
+    images_save(&app, &list)?;
+    Ok(entry)
+}
+
+#[tauri::command]
+pub fn images_index(app: AppHandle) -> Vec<serde_json::Value> {
+    images_load(&app)
+}
+
+/// The image as a data: URL (the webview's CSP allows data: images).
+#[tauri::command]
+pub async fn image_data(app: AppHandle, id: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = std::fs::read(image_file(&app, &id)?).map_err(e)?;
+    let (_, mime) = image_kind(&bytes);
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    ))
+}
+
+#[tauri::command]
+pub fn image_remove(app: AppHandle, id: String) -> Result<(), String> {
+    if let Ok(f) = image_file(&app, &id) {
+        let _ = std::fs::remove_file(f);
+    }
+    let list: Vec<serde_json::Value> = images_load(&app)
+        .into_iter()
+        .filter(|x| x["id"].as_str() != Some(id.as_str()))
+        .collect();
+    images_save(&app, &list)
+}
+
+/// Copy a gallery image to a location the user picked in the save dialog.
+#[tauri::command]
+pub fn image_export(app: AppHandle, id: String, dest: String) -> Result<(), String> {
+    std::fs::copy(image_file(&app, &id)?, PathBuf::from(dest))
+        .map(|_| ())
+        .map_err(e)
+}
+
 /* ------------------------- chat store (local JSON file) ------------------------- */
 
 fn chats_path(app: &AppHandle) -> PathBuf {

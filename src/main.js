@@ -98,7 +98,10 @@ async function loadOverview() {
     setConn("ok", "connected");
     $("#stats").innerHTML = `
       ${stat("Spendable", money(c.total_spendable_usd), "green")}
-      ${stat("Workers online", `${w.online || 0} / ${w.count || 0}`, "blue")}
+      ${stat("Workers online", (() => {
+        const hid = hiddenWorkers(), vis = (w.workers || []).filter((x) => !hid.includes(x.name));
+        return w.workers ? `${vis.filter((x) => x.online).length} / ${vis.length}` : `${w.online || 0} / ${w.count || 0}`;
+      })(), "blue")}
       ${stat("Den earned", (w.den_earned ?? 0), "")}
       ${stat("Jobs completed", (w.jobs_completed ?? 0), "")}`;
     renderWorkers(w.workers || []);
@@ -113,17 +116,41 @@ async function loadOverview() {
 function stat(k, v, cls) {
   return `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div></div>`;
 }
+/* Workers can't be deleted through the grid API, so retired ones are hidden
+   locally (per device). Hidden workers are also excluded from offline alerts. */
+let LAST_WORKERS = [], SHOW_HIDDEN = false;
+function hiddenWorkers() { try { return JSON.parse(get("aipg_hidden_workers") || "[]"); } catch (e) { return []; } }
+function setHiddenWorkers(list) { set("aipg_hidden_workers", JSON.stringify([...new Set(list)])); }
 function renderWorkers(workers) {
+  LAST_WORKERS = workers;
+  const hidden = hiddenWorkers();
+  const nHidden = workers.filter((w) => hidden.includes(w.name)).length;
+  const shown = workers.filter((w) => SHOW_HIDDEN || !hidden.includes(w.name));
+  const offline = workers.filter((w) => !w.online && !hidden.includes(w.name)).length;
+  $("#wtools").innerHTML =
+    (offline ? `<button class="btn ghost" id="hide-offline">Hide ${offline} offline</button>` : "") +
+    (nHidden ? `<button class="btn ghost" id="toggle-hidden">${SHOW_HIDDEN ? "Hide hidden" : `Show hidden (${nHidden})`}</button>` : "");
+  const ho = $("#hide-offline");
+  if (ho) ho.onclick = () => { setHiddenWorkers(hidden.concat(workers.filter((w) => !w.online).map((w) => w.name))); renderWorkers(workers); toast("Offline workers hidden"); };
+  const th = $("#toggle-hidden");
+  if (th) th.onclick = () => { SHOW_HIDDEN = !SHOW_HIDDEN; renderWorkers(workers); };
   if (!workers.length) { $("#workers").innerHTML = '<p class="muted">No workers on this account yet.</p>'; return; }
-  $("#workers").innerHTML = workers.map((w) => {
-    const on = !!w.online, maint = !!w.maintenance;
+  if (!shown.length) { $("#workers").innerHTML = '<p class="muted">All workers are hidden.</p>'; return; }
+  $("#workers").innerHTML = shown.map((w, i) => {
+    const on = !!w.online, maint = !!w.maintenance, isHidden = hidden.includes(w.name);
     const badge = maint ? '<span class="chip">maintenance</span>'
       : on ? '<span class="chip on">online</span>' : '<span class="chip off">offline</span>';
     const models = (w.models || []).join(", ") || "—";
-    return `<div class="card"><h3>${esc(w.name)}</h3>
-      <div class="chips">${badge}<span class="chip">${esc(w.type || "")}</span></div>
-      <div class="wmeta">models: ${esc(models)}<br>den: ${w.den_earned ?? 0} · jobs: ${w.jobs_completed ?? 0}</div></div>`;
+    return `<div class="card${isHidden ? " dim" : ""}"><h3>${esc(w.name)}</h3>
+      <div class="chips">${badge}<span class="chip">${esc(w.type || "")}</span>${isHidden ? '<span class="chip">hidden</span>' : ""}</div>
+      <div class="wmeta">models: ${esc(models)}<br>den: ${w.den_earned ?? 0} · jobs: ${w.jobs_completed ?? 0}</div>
+      <div class="row"><button class="btn ghost" data-wi="${i}">${isHidden ? "Unhide" : "Hide"}</button></div></div>`;
   }).join("");
+  $$("#workers [data-wi]").forEach((b) => (b.onclick = () => {
+    const name = shown[Number(b.dataset.wi)].name, cur = hiddenWorkers();
+    setHiddenWorkers(cur.includes(name) ? cur.filter((x) => x !== name) : cur.concat(name));
+    renderWorkers(LAST_WORKERS);
+  }));
 }
 
 async function loadModels() {
@@ -219,8 +246,9 @@ function loadWState() { try { return JSON.parse(get(LS.wstate) || "{}"); } catch
 function saveWState(s) { set(LS.wstate, JSON.stringify(s)); }
 function checkTransitions(workers) {
   if (get(LS.alerts) !== "1") { saveWState(workerMap(workers)); return; }
-  const prev = loadWState();
+  const prev = loadWState(), hid = hiddenWorkers();
   for (const w of workers) {
+    if (hid.includes(w.name)) continue; // no alerts for hidden (retired) workers
     const p = prev[w.name] || {};
     const on = !!w.online, maint = !!w.maintenance;
     if (p.online === true && !on) {
@@ -930,19 +958,24 @@ async function loadChat() {
   loadCurrentChat();
 }
 
-/* ---------- images (txt2img / img2img via grid) ---------- */
-let IMG_WIRED = false;
+/* ---------- images (txt2img / img2img via grid, local gallery) ---------- */
+let IMG_WIRED = false, IMG_ABORT = null, IMG_SOURCE = "", IMG_TICK = null;
+const IMG_CACHE = {}; // gallery id -> data URL
 function imgMode() { const r = document.querySelector('input[name=imgmode]:checked'); return r ? r.value : "txt2img"; }
 
 async function fillImgModels() {
-  const sel = $("#imgmodel");
+  const sel = $("#imgmodel"), keep = sel.value || get("aipg_imgmodel") || "";
   try {
     const r = await fetch(API + "/status/models", { headers: { "Accept": "application/json" } });
     const list = await r.json();
-    const imgs = (Array.isArray(list) ? list : []).filter((m) => m.type === "image").map((m) => m.name);
+    const imgs = (Array.isArray(list) ? list : []).filter((m) => m.type === "image");
     sel.innerHTML = imgs.length
-      ? imgs.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("")
+      ? imgs.map((m) => {
+          const lat = m.avg_latency_s ? ` · ~${Math.round(m.avg_latency_s)} s` : "";
+          return `<option value="${esc(m.name)}">${esc(m.name)}${lat}</option>`;
+        }).join("")
       : '<option value="">(no image models online)</option>';
+    if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
   } catch (e) { sel.innerHTML = '<option value="">(could not load)</option>'; }
 }
 
@@ -950,42 +983,158 @@ function fileToDataURL(f) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
 }
 
+function setImgSource(dataUrl) {
+  IMG_SOURCE = dataUrl || "";
+  const box = $("#imgsrcprev");
+  if (!IMG_SOURCE) { box.innerHTML = ""; $("#imgfile").value = ""; return; }
+  box.innerHTML = `<img alt="source image"><button class="btn ghost" id="imgsrcclear">Remove</button>`;
+  box.querySelector("img").src = IMG_SOURCE;
+  $("#imgsrcclear").onclick = () => setImgSource("");
+}
+function setImgMode(mode) {
+  const r = document.querySelector(`input[name=imgmode][value="${mode}"]`); if (r) r.checked = true;
+  $("#imgsrcrow").style.display = mode === "img2img" ? "" : "none";
+}
+
+function imgBusy(on) {
+  $("#imggen").style.display = on ? "none" : "";
+  $("#imgcancel").style.display = on ? "" : "none";
+  if (!on) { clearInterval(IMG_TICK); IMG_TICK = null; $("#imgbar").style.display = "none"; }
+}
+
 async function imgGenerate() {
   const key = apiKey(); if (!key) { toast("Save your API key in Settings first"); return show("settings"); }
   const model = $("#imgmodel").value; if (!model) { toast("No image model available"); return; }
   const prompt = $("#imgprompt").value.trim(); if (!prompt) { toast("Enter a prompt"); return; }
-  const payload = { model, prompt, n: 1 };
-  if (imgMode() === "img2img") {
-    const f = $("#imgfile").files[0]; if (!f) { toast("Choose an image"); return; }
-    payload.image = await fileToDataURL(f);
+  const size = $("#imgsize").value, n = parseInt($("#imgcount").value, 10) || 1;
+  const mode = imgMode();
+  const token = "d" + newId() + newId();
+  const payload = { model, prompt, n, size, progress_token: token };
+  if (mode === "img2img") {
+    if (!IMG_SOURCE) { toast("Choose a source image"); return; }
+    payload.image = IMG_SOURCE;
   }
-  $("#imggen").disabled = true; $("#imgmsg").textContent = "generating… (this can take a moment)"; $("#imgresult").innerHTML = "";
+  set("aipg_imgmodel", model); set("aipg_imgsize", size);
+
+  IMG_ABORT = new AbortController();
+  imgBusy(true);
+  const t0 = Date.now(); let pct = null;
+  const paint = () => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    $("#imgmsg").textContent = pct != null ? `Generating… ${pct} % · ${s} s` : `Waiting for a worker… ${s} s`;
+    if (pct != null) bar("#imgbar", pct / 100);
+  };
+  paint();
+  IMG_TICK = setInterval(async () => {
+    try {
+      const r = await fetch(API + "/progress/" + token, { headers: { "Accept": "application/json" } });
+      const d = await r.json();
+      if (typeof d.progress === "number") pct = Math.max(0, Math.min(100, Math.round(d.progress)));
+    } catch (e) {}
+    paint();
+  }, 1500);
+
   try {
     const r = await fetch(API + "/images/generations", {
       method: "POST", headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload), signal: IMG_ABORT.signal,
     });
     const d = await r.json();
-    if (!r.ok) throw new Error((d && d.detail) || ("HTTP " + r.status));
-    const item = (d.data && d.data[0]) || {};
-    const src = item.url ? item.url : (item.b64_json ? "data:image/png;base64," + item.b64_json : "");
-    if (!src) throw new Error("No image data in the response.");
-    const img = document.createElement("img"); img.src = src;
-    $("#imgresult").appendChild(img);
-    const a = document.createElement("a"); a.href = src; a.download = "aipg-image.png"; a.textContent = "Download"; a.className = "btn ghost";
-    $("#imgresult").appendChild(a);
-    if (item.revised_prompt) { const p = document.createElement("p"); p.className = "hint"; p.textContent = item.revised_prompt; $("#imgresult").appendChild(p); }
-    $("#imgmsg").textContent = "done";
-  } catch (e) { $("#imgmsg").textContent = "⚠ " + emsg(e); }
-  finally { $("#imggen").disabled = false; }
+    if (!r.ok) throw new Error((d && d.detail && (typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail))) || ("HTTP " + r.status));
+    const items = (d.data || []).map((it) => ({
+      src: it.url ? it.url : (it.b64_json ? "data:image/png;base64," + it.b64_json : ""),
+      revised: it.revised_prompt || "",
+    })).filter((x) => x.src);
+    if (!items.length) throw new Error("No image data in the response.");
+    const secs = Math.round((Date.now() - t0) / 1000);
+    let saved = 0;
+    for (const it of items) {
+      const meta = { prompt, model, size, mode, revised: it.revised };
+      if (TAURI.core) {
+        try { await invoke("image_store", { src: it.src, meta }); saved++; }
+        catch (e) { addLooseImage(it.src, meta); toast("Could not save to gallery: " + emsg(e)); }
+      } else addLooseImage(it.src, meta);
+    }
+    $("#imgmsg").textContent = `Done in ${secs} s` + (saved ? ` · ${saved} saved to the gallery` : "");
+    if (saved) await renderGallery();
+  } catch (e) {
+    $("#imgmsg").textContent = e.name === "AbortError" ? "Cancelled." : "⚠ " + emsg(e);
+  } finally { IMG_ABORT = null; imgBusy(false); }
+}
+
+/* an image that could not be stored locally (or outside the desktop app) */
+function addLooseImage(src, meta) {
+  const card = document.createElement("div"); card.className = "gcard";
+  const img = document.createElement("img"); img.src = src; img.alt = meta.prompt || "";
+  const cap = document.createElement("p"); cap.className = "gcap"; cap.textContent = meta.prompt || "";
+  card.appendChild(img); card.appendChild(cap);
+  $("#imgresult").prepend(card);
+}
+
+async function renderGallery() {
+  const box = $("#imgresult");
+  if (!TAURI.core) return;
+  let list = [];
+  try { list = await invoke("images_index"); } catch (e) {}
+  $("#imgcountlabel").textContent = list.length ? `${list.length} image${list.length === 1 ? "" : "s"} · stored locally` : "";
+  if (!list.length) { box.innerHTML = '<p class="muted">Nothing here yet — your generated images are kept on this machine.</p>'; return; }
+  box.innerHTML = "";
+  for (const it of list.slice(0, 60)) {
+    const card = document.createElement("div"); card.className = "gcard";
+    const img = document.createElement("img"); img.alt = it.prompt || ""; img.loading = "lazy";
+    const cap = document.createElement("p"); cap.className = "gcap"; cap.textContent = it.prompt || ""; cap.title = it.prompt || "";
+    const meta = document.createElement("p"); meta.className = "gmeta";
+    meta.textContent = [it.model, it.size, it.ts ? new Date(it.ts).toLocaleDateString() : ""].filter(Boolean).join(" · ");
+    const row = document.createElement("div"); row.className = "grow";
+    const mk = (label, fn) => { const b = document.createElement("button"); b.className = "btn ghost"; b.textContent = label; b.onclick = fn; row.appendChild(b); return b; };
+    mk("Save…", () => exportImage(it));
+    mk("Reuse prompt", () => { $("#imgprompt").value = it.prompt || ""; $("#imgprompt").focus(); $("#imgprompt").scrollIntoView({ block: "center" }); });
+    mk("As source", async () => { const u = await galleryData(it.id); if (u) { setImgMode("img2img"); setImgSource(u); $("#imgprompt").scrollIntoView({ block: "center" }); toast("Set as source image"); } });
+    mk("Delete", async () => {
+      if (!(await askConfirm("Delete this image from the gallery?", "Delete image", false))) return;
+      try { await invoke("image_remove", { id: it.id }); delete IMG_CACHE[it.id]; } catch (e) { toast(emsg(e)); }
+      renderGallery();
+    });
+    img.onclick = () => openLightbox(img.src, it.prompt || "");
+    card.appendChild(img); card.appendChild(cap); card.appendChild(meta); card.appendChild(row);
+    box.appendChild(card);
+    galleryData(it.id).then((u) => { if (u) img.src = u; });
+  }
+}
+async function galleryData(id) {
+  if (IMG_CACHE[id]) return IMG_CACHE[id];
+  try { IMG_CACHE[id] = await invoke("image_data", { id }); return IMG_CACHE[id]; } catch (e) { return ""; }
+}
+async function exportImage(it) {
+  let dest;
+  try {
+    dest = await invoke("plugin:dialog|save", {
+      options: { title: "Save image", defaultPath: it.file || "aipg-image.png" },
+    });
+  } catch (e) { toast("Save dialog unavailable: " + emsg(e)); return; }
+  if (!dest) return;
+  try { await invoke("image_export", { id: it.id, dest }); toast("Image saved"); } catch (e) { toast(emsg(e)); }
+}
+function openLightbox(src, caption) {
+  if (!src) return;
+  const lb = $("#lightbox");
+  lb.querySelector("img").src = src;
+  lb.querySelector("p").textContent = caption;
+  lb.style.display = "";
 }
 
 function wireImages() {
   IMG_WIRED = true;
-  $$('input[name=imgmode]').forEach((r) => (r.onchange = () => { $("#imgsrcrow").style.display = imgMode() === "img2img" ? "" : "none"; }));
+  $$('input[name=imgmode]').forEach((r) => (r.onchange = () => setImgMode(imgMode())));
+  $("#imgfile").onchange = async () => { const f = $("#imgfile").files[0]; if (f) setImgSource(await fileToDataURL(f)); };
   $("#imggen").onclick = imgGenerate;
+  $("#imgcancel").onclick = () => { if (IMG_ABORT) IMG_ABORT.abort(); };
+  $("#imgprompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); imgGenerate(); } });
+  const sz = get("aipg_imgsize"); if (sz && [...$("#imgsize").options].some((o) => o.value === sz)) $("#imgsize").value = sz;
+  $("#lightbox").onclick = () => { $("#lightbox").style.display = "none"; };
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#lightbox").style.display = "none"; });
 }
-function loadImages() { if (!IMG_WIRED) wireImages(); fillImgModels(); }
+function loadImages() { if (!IMG_WIRED) wireImages(); fillImgModels(); renderGallery(); }
 
 /* ---------- misc ---------- */
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }

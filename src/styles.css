@@ -574,3 +574,22 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .lmrow{display:flex;align-items:center;gap:var(--s3);padding:var(--s2) 0;border-bottom:1px solid var(--bd)}
 .lmrow .path{flex:1 1 auto;max-width:none}
 .lmrow .muted{min-width:7ch;text-align:right;font-family:var(--mono)}
+
+/* image gallery */
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:var(--s4);margin-top:var(--s3)}
+.gallery > .muted{grid-column:1/-1}
+.gcard{display:flex;flex-direction:column;gap:var(--s2);min-width:0}
+.gcard img{display:block;width:100%;aspect-ratio:1/1;object-fit:cover;background:var(--code);
+  border:1px solid var(--bd);cursor:zoom-in}
+.gcap{margin:0;font-size:12.5px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.gmeta{margin:0;color:var(--mut);font:var(--t-micro)/1.3 var(--mono)}
+.grow{display:flex;flex-wrap:wrap;gap:var(--s1)}
+.grow .btn{padding:2px 8px;font-size:12px}
+.srcprev{display:inline-flex;align-items:center;gap:var(--s2)}
+.srcprev img{height:56px;width:auto;border:1px solid var(--bd)}
+.lightbox{flex-direction:column;gap:var(--s3);cursor:zoom-out;padding:var(--s5)}
+.lightbox img{max-width:100%;max-height:calc(100vh - 110px);object-fit:contain;border:1px solid var(--bd)}
+.lightbox p{margin:0;max-width:80ch;text-align:center;color:#fff;font-size:13px}
+/* hidden (retired) workers when revealed */
+.card.dim{opacity:.55}
+.lightbox,:root[data-theme="light"] .lightbox{background:rgba(10,9,8,.9)}

@@ -41,8 +41,9 @@ running a worker is optional.
   specific one) or to a **local model** on your own Ollama. Streaming replies, multiple
   conversations, local history with a context cap. Nothing leaves your machine except the
   prompt you send to the grid.
-- **Images** — text-to-image and image-to-image on the grid's image models
-  (FLUX.2 Klein, Krea Turbo).
+- **Images** — text-to-image and image-to-image on the grid's image models, with format
+  and count options, live generation progress, and a **local gallery** (save, reuse a
+  prompt, use a result as the next source image).
 - **Run a worker** — one click turns your machine into a grid worker and starts earning:
   - downloads the **official** `grid-inference-worker` binary (SHA-256 verified),
   - downloads and runs a **sandboxed, managed Ollama** — no system install required,
@@ -51,8 +52,8 @@ running a worker is optional.
   - shows live download progress (GB and %), lets you pick **where models are stored**,
     and lists installed models with their size so you can delete what you no longer need,
   - restarts the worker automatically if it crashes.
-- **Overview / Models / Earnings** — spendable balance, workers online, den earned and
-  jobs; live model list with prices; recent jobs plus a **local earnings-history graph**.
+- **Overview / Models / Earnings** — spendable balance, workers online (retired workers
+  can be hidden), den earned and jobs; live model list with prices; recent jobs plus a **local earnings-history graph**.
 - **Offline alerts** — native notifications when a worker goes offline, enters
   maintenance, or recovers (while the app is open), optionally also pushed to your phone
   via an [ntfy](https://ntfy.sh) topic.

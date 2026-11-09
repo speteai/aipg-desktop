@@ -28,7 +28,10 @@
         No API key yet. Open <b>Settings</b> and paste your <code>grid_…</code> key to connect.
       </div>
       <div class="stats" id="stats"></div>
-      <h2 class="sec">Your workers</h2>
+      <div class="vh" style="margin-top:22px">
+        <h2 class="sec" style="margin:0">Your workers</h2>
+        <span id="wtools" class="row"></span>
+      </div>
       <div id="workers" class="cards"><p class="muted">—</p></div>
       <p class="stamp" id="stamp"></p>
     </section>
@@ -74,20 +77,42 @@
       <div class="chatbar">
         <label class="seg"><input type="radio" name="imgmode" value="txt2img" checked> Text → Image</label>
         <label class="seg"><input type="radio" name="imgmode" value="img2img"> Image → Image</label>
-        <select id="imgmodel" class="sel"></select>
+        <select id="imgmodel" class="sel" title="Image model (with its typical generation time)"></select>
+        <label class="seg">Format
+          <select id="imgsize" class="sel">
+            <option value="1024x1024" selected>Square · 1024×1024</option>
+            <option value="1344x768">Landscape · 1344×768</option>
+            <option value="768x1344">Portrait · 768×1344</option>
+            <option value="1216x832">Photo · 1216×832</option>
+            <option value="832x1216">Photo portrait · 832×1216</option>
+          </select>
+        </label>
+        <label class="seg">Count
+          <select id="imgcount" class="sel">
+            <option value="1" selected>1</option><option value="2">2</option>
+            <option value="3">3</option><option value="4">4</option>
+          </select>
+        </label>
       </div>
-      <p class="hint">Generated on the grid. Uses your API key (billable). Image models support txt2img and img2img.</p>
+      <p class="hint">Generated on the grid with your API key (billable per image). Results are saved to a local gallery on this machine.</p>
       <div class="field" style="max-width:none">
         <div id="imgsrcrow" class="row" style="display:none">
           <input type="file" id="imgfile" accept="image/*">
+          <span id="imgsrcprev" class="srcprev"></span>
         </div>
-        <textarea id="imgprompt" rows="2" placeholder="Describe the image…"></textarea>
+        <textarea id="imgprompt" rows="3" placeholder="Describe the image… (Ctrl+Enter to generate)"></textarea>
         <div class="row" style="margin-top:8px">
           <button class="btn primary" id="imggen">Generate</button>
+          <button class="btn ghost" id="imgcancel" style="display:none">Cancel</button>
           <span id="imgmsg" class="muted"></span>
         </div>
+        <div id="imgbar" class="pbar" style="display:none"><span></span></div>
       </div>
-      <div id="imgresult" class="imgresult"></div>
+      <div class="vh" style="margin-top:22px">
+        <h2 class="sec" style="margin:0">Gallery</h2>
+        <span id="imgcountlabel" class="muted"></span>
+      </div>
+      <div id="imgresult" class="gallery"></div>
     </section>
 
     <!-- WORKER -->
@@ -288,6 +313,8 @@
       </div>
     </div>
   </div>
+
+  <div id="lightbox" class="overlay lightbox" style="display:none"><img alt=""><p></p></div>
 
   <div id="toast" class="toast"></div>
   <script src="main.js"></script>

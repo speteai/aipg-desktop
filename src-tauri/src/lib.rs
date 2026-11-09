@@ -48,6 +48,11 @@ pub fn run() {
             worker::models_dir_set,
             worker::config_get,
             worker::config_set,
+            worker::image_store,
+            worker::images_index,
+            worker::image_data,
+            worker::image_remove,
+            worker::image_export,
             worker::chats_read,
             worker::chats_write,
         ])
