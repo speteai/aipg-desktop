@@ -10,6 +10,7 @@
   <nav class="side">
     <div class="brand"><span class="bolt">⚡</span> AIPG</div>
     <button class="nav active" data-view="overview">Overview</button>
+    <button class="nav" data-view="worker">Run a worker</button>
     <button class="nav" data-view="models">Models</button>
     <button class="nav" data-view="earnings">Earnings</button>
     <button class="nav" data-view="settings">Settings</button>
@@ -28,6 +29,66 @@
       <h2 class="sec">Your workers</h2>
       <div id="workers" class="cards"><p class="muted">—</p></div>
       <p class="stamp" id="stamp"></p>
+    </section>
+
+    <!-- WORKER -->
+    <section class="view" id="view-worker">
+      <header class="vh"><h1>Run a worker</h1><span id="wstatus" class="chip">idle</span></header>
+      <p class="muted">Earn on the grid from this machine — the app runs the official
+        worker and manages Ollama for you. No Docker needed.</p>
+
+      <div id="wunsupported" class="banner" style="display:none"></div>
+
+      <!-- step 1: prerequisites -->
+      <h2 class="sec">1 · Prerequisites</h2>
+      <div class="cards">
+        <div class="card">
+          <h3>Ollama</h3>
+          <div id="ollama-state" class="chips"><span class="chip">checking…</span></div>
+          <p class="hint">The local model backend. The app starts it and pulls your model.</p>
+          <div class="row">
+            <button class="btn" id="btn-ollama">Start Ollama</button>
+            <a class="btn ghost" href="#" data-ext="https://ollama.com/download">Install Ollama</a>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Worker binary</h3>
+          <div id="worker-dl-state" class="chips"><span class="chip">checking…</span></div>
+          <p class="hint">Official grid-inference-worker <code>v0.3.12</code>, SHA-256 verified on download.</p>
+          <div class="row"><button class="btn" id="btn-download">Download worker</button></div>
+          <div id="dlbar" class="pbar" style="display:none"><span></span></div>
+        </div>
+      </div>
+
+      <!-- step 2: model -->
+      <h2 class="sec">2 · Model</h2>
+      <div class="field" style="max-width:none">
+        <div class="row">
+          <input id="wmodel" type="text" placeholder="qwen3:8b" autocomplete="off" spellcheck="false" list="wmodels-list">
+          <datalist id="wmodels-list"></datalist>
+          <button class="btn" id="btn-pull">Pull / update model</button>
+        </div>
+        <p class="hint">An Ollama model tag. Small models (e.g. <code>llama3.2:3b</code>, <code>qwen3:8b</code>)
+          need less RAM. Pulling can take a while the first time.</p>
+        <div id="pullbar" class="pbar" style="display:none"><span></span></div>
+        <p class="hint" id="pullmsg"></p>
+      </div>
+
+      <!-- step 3: run -->
+      <h2 class="sec">3 · Run</h2>
+      <div class="field" style="max-width:none">
+        <div class="row">
+          <input id="wname" type="text" placeholder="Worker name (as enrolled in Console)" autocomplete="off" spellcheck="false">
+        </div>
+        <p class="hint">Reuse the worker name + API key you enrolled via the Console.
+          Uses the API key from <b>Settings</b>. Stop your Docker worker first if it uses the same name.</p>
+        <div class="row">
+          <button class="btn" id="btn-start">▶ Start worker</button>
+          <button class="btn ghost" id="btn-stop" disabled>■ Stop</button>
+        </div>
+      </div>
+      <h2 class="sec">Log</h2>
+      <pre id="wlog" class="log">—</pre>
     </section>
 
     <!-- MODELS -->

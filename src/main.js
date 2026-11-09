@@ -207,6 +207,140 @@ function startPolling() {
   }
 }
 
+/* ---------- worker (all-in-one, Tauri commands) ---------- */
+const TAURI = window.__TAURI__ || {};
+const invoke = (cmd, args) =>
+  TAURI.core && TAURI.core.invoke ? TAURI.core.invoke(cmd, args) : Promise.reject(new Error("not-in-app"));
+const listen = (ev, cb) =>
+  TAURI.event && TAURI.event.listen ? TAURI.event.listen(ev, cb) : Promise.resolve(() => {});
+
+let WORKER_WIRED = false, WORKER_RUNNING = false;
+
+function logLine(s) {
+  const el = $("#wlog");
+  if (el.textContent === "—") el.textContent = "";
+  el.textContent += (el.textContent ? "\n" : "") + s;
+  el.scrollTop = el.scrollHeight;
+}
+function wsetStatus(txt, cls) { const c = $("#wstatus"); c.textContent = txt; c.className = "chip" + (cls ? " " + cls : ""); }
+function bar(sel, frac) {
+  const b = $(sel); b.style.display = ""; b.firstElementChild.style.width = Math.max(0, Math.min(1, frac)) * 100 + "%";
+}
+
+function renderPrereqs(p) {
+  if (!p.supported) {
+    $("#wunsupported").style.display = "";
+    $("#wunsupported").innerHTML = `Für <b>${esc(p.os)}/${esc(p.arch)}</b> gibt es keine offizielle Worker-Binary (v0.3.12). ` +
+      `Unterstützt: Linux x64/arm64, macOS (Apple Silicon), Windows x64.`;
+  } else $("#wunsupported").style.display = "none";
+
+  $("#ollama-state").innerHTML = p.ollama_running
+    ? '<span class="chip run">running</span>'
+    : p.ollama_installed ? '<span class="chip warn">installed, stopped</span>' : '<span class="chip off">not installed</span>';
+  $("#btn-ollama").disabled = p.ollama_running || !p.ollama_installed;
+
+  $("#worker-dl-state").innerHTML = p.worker_downloaded
+    ? '<span class="chip run">downloaded</span>' : '<span class="chip">not downloaded</span>';
+  $("#btn-download").disabled = !p.supported || p.worker_downloaded;
+  $("#btn-download").textContent = p.worker_downloaded ? "Re-download" : "Download worker";
+  if (p.worker_downloaded) $("#btn-download").disabled = false;
+
+  const ready = p.supported && p.worker_downloaded;
+  $("#btn-start").disabled = !ready || WORKER_RUNNING;
+}
+
+async function refreshOllamaModels() {
+  try {
+    const list = await invoke("ollama_models");
+    $("#wmodels-list").innerHTML = (list || []).map((m) => `<option value="${esc(m)}">`).join("");
+  } catch (e) {}
+}
+
+async function loadWorker() {
+  if (!TAURI.core) {
+    $("#wunsupported").style.display = "";
+    $("#wunsupported").textContent = "Dieser Bereich funktioniert nur in der installierten Desktop-App.";
+    return;
+  }
+  $("#wname").value = get("aipg_wname") || "";
+  $("#wmodel").value = get("aipg_wmodel") || "qwen3:8b";
+  if (!WORKER_WIRED) wireWorker();
+  try { renderPrereqs(await invoke("prereqs")); } catch (e) { toast("prereqs: " + e.message); }
+  try { WORKER_RUNNING = await invoke("worker_running"); } catch (e) {}
+  syncRunButtons();
+  refreshOllamaModels();
+}
+
+function syncRunButtons() {
+  $("#btn-stop").disabled = !WORKER_RUNNING;
+  $("#btn-start").disabled = WORKER_RUNNING || $("#worker-dl-state").textContent.indexOf("downloaded") < 0;
+  wsetStatus(WORKER_RUNNING ? "running" : "idle", WORKER_RUNNING ? "run" : "");
+}
+
+function wireWorker() {
+  WORKER_WIRED = true;
+
+  listen("worker-dl", (e) => {
+    const { received, total } = e.payload || {};
+    if (total) bar("#dlbar", received / total);
+  });
+  listen("ollama-pull", (e) => {
+    const j = e.payload || {};
+    if (j.total && j.completed != null) bar("#pullbar", j.completed / j.total);
+    if (j.status) $("#pullmsg").textContent = j.status;
+  });
+  listen("worker-log", (e) => logLine(String(e.payload)));
+  listen("worker-exit", () => {
+    WORKER_RUNNING = false; syncRunButtons();
+    logLine("[desktop] worker beendet.");
+    nativeNotify("Worker stopped", "The worker process exited.");
+  });
+
+  $("#btn-ollama").onclick = async () => {
+    $("#btn-ollama").disabled = true; wsetStatus("starting Ollama…", "warn");
+    try { await invoke("ollama_ensure"); toast("Ollama läuft"); }
+    catch (e) { toast(e.message); }
+    renderPrereqs(await invoke("prereqs")); refreshOllamaModels(); syncRunButtons();
+  };
+
+  $("#btn-download").onclick = async () => {
+    $("#btn-download").disabled = true; bar("#dlbar", 0);
+    try { await invoke("download_worker"); toast("Worker heruntergeladen & verifiziert"); }
+    catch (e) { toast(e.message); logLine("[download] " + e.message); }
+    $("#dlbar").style.display = "none";
+    renderPrereqs(await invoke("prereqs")); syncRunButtons();
+  };
+
+  $("#btn-pull").onclick = async () => {
+    const model = $("#wmodel").value.trim(); if (!model) return toast("Modell-Tag eingeben");
+    set("aipg_wmodel", model);
+    $("#btn-pull").disabled = true; bar("#pullbar", 0); $("#pullmsg").textContent = "contacting Ollama…";
+    try { await invoke("ollama_ensure"); await invoke("ollama_pull", { model }); toast("Modell bereit"); }
+    catch (e) { toast(e.message); $("#pullmsg").textContent = "Fehler: " + e.message; }
+    $("#btn-pull").disabled = false; refreshOllamaModels();
+  };
+
+  $("#btn-start").onclick = async () => {
+    const api_key = apiKey();
+    if (!api_key) { toast("Erst API-Key in Settings speichern"); return show("settings"); }
+    const model = $("#wmodel").value.trim();
+    const worker_name = $("#wname").value.trim();
+    set("aipg_wname", worker_name); set("aipg_wmodel", model);
+    $("#btn-start").disabled = true;
+    try {
+      await invoke("ollama_ensure");
+      await invoke("worker_start", { cfg: { api_key, model, worker_name } });
+      WORKER_RUNNING = true; syncRunButtons();
+    } catch (e) { toast(e.message); logLine("[start] " + e.message); syncRunButtons(); }
+  };
+
+  $("#btn-stop").onclick = async () => {
+    $("#btn-stop").disabled = true;
+    try { await invoke("worker_stop"); } catch (e) {}
+    WORKER_RUNNING = false; syncRunButtons();
+  };
+}
+
 /* ---------- misc ---------- */
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
@@ -215,6 +349,7 @@ function show(view) {
   $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   if (view === "overview") loadOverview();
+  if (view === "worker") loadWorker();
   if (view === "models") loadModels();
   if (view === "earnings") loadEarnings();
 }

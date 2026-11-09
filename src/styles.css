@@ -76,6 +76,16 @@ tbody tr:last-child td{border-bottom:none}
   background:var(--code);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:8px 11px}
 .hint{color:var(--mut);font-size:.82rem;margin:8px 0 0}
 
+/* worker: progress bar + log */
+.pbar{height:8px;background:var(--chip);border:1px solid var(--bd);border-radius:999px;
+  overflow:hidden;margin-top:10px}
+.pbar>span{display:block;height:100%;width:0;background:var(--acc2);transition:width .2s}
+.log{background:var(--code);border:1px solid var(--bd);border-radius:11px;padding:12px 14px;
+  font-family:ui-monospace,Menlo,monospace;font-size:.8rem;line-height:1.5;color:var(--mut);
+  max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
+.chip.run{color:var(--acc);border-color:var(--acc)}
+.chip.warn{color:var(--warn);border-color:var(--warn)}
+
 /* toast */
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(20px);
   background:var(--panel2);border:1px solid var(--bd);border-radius:10px;padding:9px 16px;
