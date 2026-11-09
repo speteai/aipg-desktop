@@ -35,20 +35,36 @@
 
     <!-- CHAT -->
     <section class="view" id="view-chat">
-      <header class="vh"><h1>Chat</h1></header>
-      <div class="chatbar">
-        <label class="seg" id="chatsrc-grid"><input type="radio" name="chatsrc" value="grid" checked> Grid</label>
-        <label class="seg" id="chatsrc-local"><input type="radio" name="chatsrc" value="local"> Local</label>
-        <select id="chatmodel" class="sel"></select>
-        <span class="spacer"></span>
-        <button class="btn ghost" id="chatclear">New chat</button>
-      </div>
-      <p class="hint" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
-      <div id="chatlog" class="chatlog"></div>
-      <div class="chatinput">
-        <textarea id="chattext" rows="1" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
-        <button class="btn" id="chatsend">Send</button>
-        <button class="btn ghost" id="chatstop" style="display:none">Stop</button>
+      <div class="chatwrap">
+        <aside class="chatside">
+          <button class="btn" id="chatnew">+ New chat</button>
+          <div id="chatlist" class="chatlist"></div>
+          <p class="hint" style="margin-top:auto">Chats are stored locally on this machine.</p>
+        </aside>
+        <div class="chatmain">
+          <div class="chatbar">
+            <label class="seg"><input type="radio" name="chatsrc" value="grid" checked> Grid</label>
+            <label class="seg"><input type="radio" name="chatsrc" value="local"> Local</label>
+            <select id="chatmodel" class="sel"></select>
+            <span class="spacer"></span>
+            <label class="seg" title="Only send the last N messages — saves grid cost">Context
+              <select id="chatcap" class="sel">
+                <option value="10">10</option>
+                <option value="20" selected>20</option>
+                <option value="40">40</option>
+                <option value="0">All</option>
+              </select>
+            </label>
+            <label class="seg" title="Summarize older messages instead of dropping them"><input type="checkbox" id="chatsum"> Summarize</label>
+          </div>
+          <p class="hint" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
+          <div id="chatlog" class="chatlog"></div>
+          <div class="chatinput">
+            <textarea id="chattext" rows="1" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+            <button class="btn" id="chatsend">Send</button>
+            <button class="btn ghost" id="chatstop" style="display:none">Stop</button>
+          </div>
+        </div>
       </div>
     </section>
 

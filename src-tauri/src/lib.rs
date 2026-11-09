@@ -22,6 +22,8 @@ pub fn run() {
             worker::worker_start,
             worker::worker_stop,
             worker::worker_running,
+            worker::chats_read,
+            worker::chats_write,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

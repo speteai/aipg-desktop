@@ -607,6 +607,31 @@ pub async fn worker_running(state: State<'_, Arc<Procs>>) -> Result<bool, String
     Ok(state.worker.lock().await.is_some())
 }
 
+/* ------------------------- chat store (local JSON file) ------------------------- */
+
+fn chats_path(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("chats.json")
+}
+
+#[tauri::command]
+pub async fn chats_read(app: AppHandle) -> Result<String, String> {
+    match std::fs::read_to_string(chats_path(&app)) {
+        Ok(s) => Ok(s),
+        Err(ref err) if err.kind() == std::io::ErrorKind::NotFound => Ok("{}".into()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn chats_write(app: AppHandle, data: String) -> Result<(), String> {
+    std::fs::create_dir_all(data_dir(&app)).map_err(e)?;
+    let p = chats_path(&app);
+    let tmp = p.with_extension("tmp");
+    std::fs::write(&tmp, data.as_bytes()).map_err(e)?;
+    std::fs::rename(&tmp, &p).map_err(e)?;
+    Ok(())
+}
+
 pub async fn kill_all(procs: &Procs) {
     if let Some(mut c) = procs.worker.lock().await.take() {
         let _ = c.start_kill();

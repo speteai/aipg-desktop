@@ -430,11 +430,60 @@ function wireWorker() {
   $("#btn-stop2").onclick = stopWorker;
 }
 
-/* ---------- chat (grid auto/model or local ollama, streaming) ---------- */
-let CHAT_WIRED = false, CHAT_MSGS = [], CHAT_ABORT = null;
+/* ---------- chat (multi-chat, local persistence, context cap) ---------- */
+let CHAT_WIRED = false, CHAT_ABORT = null, CHAT_PERSIST_T = null, STORE = null;
 const OLLAMA_LOCAL = "http://127.0.0.1:11434/v1";
 
+function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 function chatSource() { const r = document.querySelector('input[name=chatsrc]:checked'); return r ? r.value : "grid"; }
+function curChat() { return STORE && STORE.chats.find((c) => c.id === STORE.current); }
+
+async function storeLoad() {
+  let raw = "{}";
+  try { raw = await invoke("chats_read"); } catch (e) {}
+  let s; try { s = JSON.parse(raw); } catch (e) { s = {}; }
+  STORE = {
+    v: 1,
+    chats: Array.isArray(s.chats) ? s.chats : [],
+    current: s.current || null,
+    cap: typeof s.cap === "number" ? s.cap : 20,
+    summarize: !!s.summarize,
+  };
+  if (!STORE.chats.length) addChat(false);
+  if (!STORE.current || !curChat()) STORE.current = STORE.chats[0].id;
+}
+function storePersist() {
+  clearTimeout(CHAT_PERSIST_T);
+  CHAT_PERSIST_T = setTimeout(() => { invoke("chats_write", { data: JSON.stringify(STORE) }).catch(() => {}); }, 400);
+}
+function addChat(persist = true) {
+  const c = { id: newId(), title: "New chat", src: "grid", model: "auto", msgs: [], summary: "", summaryCount: 0, updated: Date.now() };
+  STORE.chats.unshift(c); STORE.current = c.id;
+  if (persist) { renderChatList(); loadCurrentChat(); storePersist(); }
+  return c;
+}
+function deleteChat(id) {
+  STORE.chats = STORE.chats.filter((c) => c.id !== id);
+  if (!STORE.chats.length) addChat(false);
+  if (!curChat()) STORE.current = STORE.chats[0].id;
+  renderChatList(); loadCurrentChat(); storePersist();
+}
+
+function renderChatList() {
+  const el = $("#chatlist"); el.innerHTML = "";
+  for (const c of STORE.chats) {
+    const d = document.createElement("div");
+    d.className = "chatitem" + (c.id === STORE.current ? " active" : "");
+    const t = document.createElement("span"); t.className = "t"; t.textContent = c.title || "New chat";
+    const x = document.createElement("span"); x.className = "x"; x.textContent = "×"; x.title = "Delete";
+    d.appendChild(t); d.appendChild(x);
+    d.onclick = (ev) => {
+      if (ev.target === x) { ev.stopPropagation(); deleteChat(c.id); }
+      else { STORE.current = c.id; renderChatList(); loadCurrentChat(); storePersist(); }
+    };
+    el.appendChild(d);
+  }
+}
 
 async function fillChatModels() {
   const src = chatSource(), sel = $("#chatmodel");
@@ -452,8 +501,6 @@ async function fillChatModels() {
       : '<option value="">(no local models — pull one under “Run a worker”)</option>';
     $("#chathint").textContent = "Local · runs on your own Ollama, fully offline and free.";
   }
-  const last = get(src === "grid" ? "aipg_chatgrid" : "aipg_chatlocal");
-  if (last && [...sel.options].some((o) => o.value === last)) sel.value = last;
 }
 
 function addMsg(role, text, model) {
@@ -467,26 +514,80 @@ function addMsg(role, text, model) {
   return body;
 }
 
+function renderMessages() {
+  const c = curChat(); $("#chatlog").innerHTML = ""; if (!c) return;
+  for (const m of c.msgs) addMsg(m.role === "user" ? "user" : "bot", m.content, m.role !== "user" ? m.model : null);
+}
+
+function loadCurrentChat() {
+  const c = curChat(); if (!c) return;
+  const r = document.querySelector(`input[name=chatsrc][value="${c.src}"]`); if (r) r.checked = true;
+  fillChatModels().then(() => { if (c.model && [...$("#chatmodel").options].some((o) => o.value === c.model)) $("#chatmodel").value = c.model; });
+  $("#chatcap").value = String(STORE.cap);
+  $("#chatsum").checked = STORE.summarize;
+  renderMessages();
+}
+
+/* message list actually sent, honoring the context cap + summary */
+function buildSend(c) {
+  const cap = STORE.cap | 0;
+  const plain = c.msgs.map((m) => ({ role: m.role, content: m.content }));
+  if (cap > 0 && plain.length > cap) {
+    const recent = plain.slice(-cap);
+    if (STORE.summarize && c.summary) return [{ role: "system", content: "Summary of earlier conversation: " + c.summary }, ...recent];
+    return recent;
+  }
+  return plain;
+}
+
+async function simpleComplete(src, model, prompt) {
+  const url = (src === "grid" ? API : OLLAMA_LOCAL) + "/chat/completions";
+  const headers = { "Content-Type": "application/json" };
+  if (src === "grid") headers["Authorization"] = "Bearer " + apiKey();
+  const r = await fetch(url, {
+    method: "POST", headers,
+    body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: 400 }),
+  });
+  const d = await r.json(); if (!r.ok) throw new Error((d && d.detail) || ("HTTP " + r.status));
+  return (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "";
+}
+
+async function ensureSummary(c, src, model) {
+  const cap = STORE.cap | 0; if (!STORE.summarize || cap <= 0) return;
+  const olderEnd = Math.max(0, c.msgs.length - cap);
+  if (olderEnd <= (c.summaryCount || 0)) return;
+  const older = c.msgs.slice(0, olderEnd).map((m) => (m.role === "user" ? "User: " : "Assistant: ") + m.content).join("\n");
+  const prompt = (c.summary ? "Earlier summary:\n" + c.summary + "\n\n" : "") +
+    "Summarize the conversation so far in a concise paragraph, keeping key facts and decisions:\n" + older;
+  try { const s = await simpleComplete(src, model, prompt); if (s) { c.summary = s.trim(); c.summaryCount = olderEnd; } } catch (e) {}
+}
+
 async function chatSend() {
   const ta = $("#chattext"), text = ta.value.trim(); if (!text) return;
+  const c = curChat(); if (!c) return;
   const src = chatSource(), model = $("#chatmodel").value;
   if (src === "grid" && !apiKey()) { toast("Erst API-Key in Settings speichern"); return show("settings"); }
   if (src === "local" && !model) { toast("Kein lokales Modell — unter „Run a worker“ eines ziehen"); return; }
-  set(src === "grid" ? "aipg_chatgrid" : "aipg_chatlocal", model);
+  c.src = src; c.model = model;
 
   ta.value = ""; ta.style.height = "auto";
   addMsg("user", text);
-  CHAT_MSGS.push({ role: "user", content: text });
-  const body = addMsg("bot", "▍", src === "grid" ? model : "local · " + model);
+  c.msgs.push({ role: "user", content: text });
+  if (!c.title || c.title === "New chat") { c.title = text.slice(0, 40); renderChatList(); }
+  const label = src === "grid" ? model : "local · " + model;
+  const body = addMsg("bot", "▍", label);
+  storePersist();
 
   $("#chatsend").style.display = "none"; $("#chatstop").style.display = "";
   CHAT_ABORT = new AbortController();
 
+  await ensureSummary(c, src, model);
+  const sendMsgs = buildSend(c);
   const url = (src === "grid" ? API : OLLAMA_LOCAL) + "/chat/completions";
   const headers = { "Content-Type": "application/json" };
   if (src === "grid") headers["Authorization"] = "Bearer " + apiKey();
-  const payload = { model, messages: CHAT_MSGS, stream: true };
-  if (/qwen3|gpt-oss|auto|deepseek|qwen38/i.test(model)) payload.max_tokens = 2048; // reasoning headroom
+  const payload = { model, messages: sendMsgs, stream: true };
+  if (/qwen3|gpt-oss|auto|deepseek|qwen38/i.test(model)) payload.max_tokens = 2048;
 
   let acc = "", think = "";
   try {
@@ -514,28 +615,37 @@ async function chatSend() {
     if (!acc && think) acc = "(only reasoning returned) " + think.slice(0, 500);
     if (!acc) acc = "(empty response)";
     body.textContent = acc;
-    CHAT_MSGS.push({ role: "assistant", content: acc });
+    c.msgs.push({ role: "assistant", content: acc, model: label });
+    c.updated = Date.now();
   } catch (e) {
-    if (e.name === "AbortError") { body.textContent = acc + " …[stopped]"; CHAT_MSGS.push({ role: "assistant", content: acc }); }
-    else { body.textContent = "⚠ " + emsg(e); CHAT_MSGS.pop(); }
+    if (e.name === "AbortError") { body.textContent = acc + " …[stopped]"; c.msgs.push({ role: "assistant", content: acc, model: label }); }
+    else { body.textContent = "⚠ " + emsg(e); c.msgs.pop(); }
   } finally {
     $("#chatsend").style.display = ""; $("#chatstop").style.display = "none"; CHAT_ABORT = null;
+    storePersist();
   }
 }
 
 function wireChat() {
   CHAT_WIRED = true;
-  $$('input[name=chatsrc]').forEach((r) => (r.onchange = fillChatModels));
-  $("#chatmodel").onchange = () => set(chatSource() === "grid" ? "aipg_chatgrid" : "aipg_chatlocal", $("#chatmodel").value);
+  $$('input[name=chatsrc]').forEach((r) => (r.onchange = () => { const c = curChat(); if (c) c.src = chatSource(); fillChatModels(); storePersist(); }));
+  $("#chatmodel").onchange = () => { const c = curChat(); if (c) { c.model = $("#chatmodel").value; storePersist(); } };
+  $("#chatcap").onchange = () => { STORE.cap = parseInt($("#chatcap").value, 10) || 0; storePersist(); };
+  $("#chatsum").onchange = () => { STORE.summarize = $("#chatsum").checked; storePersist(); };
   $("#chatsend").onclick = chatSend;
   $("#chatstop").onclick = () => { if (CHAT_ABORT) CHAT_ABORT.abort(); };
-  $("#chatclear").onclick = () => { CHAT_MSGS = []; $("#chatlog").innerHTML = ""; };
+  $("#chatnew").onclick = () => addChat(true);
   const ta = $("#chattext");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend(); } });
 }
 
-function loadChat() { if (!CHAT_WIRED) wireChat(); fillChatModels(); }
+async function loadChat() {
+  if (!STORE) await storeLoad();
+  if (!CHAT_WIRED) wireChat();
+  renderChatList();
+  loadCurrentChat();
+}
 
 /* ---------- images (txt2img / img2img via grid) ---------- */
 let IMG_WIRED = false;
