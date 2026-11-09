@@ -158,6 +158,14 @@
           need less RAM. Pulling can take a while the first time.</p>
         <div id="pullbar" class="pbar" style="display:none"><span></span></div>
         <p class="hint" id="pullmsg"></p>
+        <div class="row" style="margin-top:10px">
+          <span class="k">Models folder</span>
+          <code id="models-dir" class="path">…</code>
+          <button class="btn ghost" id="btn-models-dir">Change…</button>
+          <button class="btn ghost" id="btn-models-dir-reset" style="display:none">Default</button>
+        </div>
+        <p class="hint">Where downloaded models are stored. Models are large — pick a drive with space.
+          Changing it applies to the next download; restart a running worker to switch.</p>
       </div>
 
       <!-- step 3: run -->

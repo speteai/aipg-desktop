@@ -31,6 +31,20 @@ fn e<T: std::fmt::Display>(x: T) -> String {
     x.to_string()
 }
 
+/// Prevent a console window from flashing up on Windows for any spawned child
+/// process (worker, managed Ollama, hardware-detection probes like powershell).
+/// No-op on other platforms.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+fn quiet(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.as_std_mut().creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /* ------------------------- paths ------------------------- */
 
 fn data_dir(app: &AppHandle) -> PathBuf {
@@ -55,7 +69,17 @@ fn ollama_root(app: &AppHandle) -> PathBuf {
 fn ollama_dist(app: &AppHandle) -> PathBuf {
     ollama_root(app).join("dist")
 }
+/// File holding an optional user-chosen models directory (one line, a path).
+fn models_override_file(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("models_dir.txt")
+}
 fn ollama_models_dir(app: &AppHandle) -> PathBuf {
+    if let Ok(s) = std::fs::read_to_string(models_override_file(app)) {
+        let s = s.trim();
+        if !s.is_empty() {
+            return PathBuf::from(s);
+        }
+    }
     ollama_root(app).join("models")
 }
 /// First existing managed ollama executable, if any.
@@ -93,7 +117,7 @@ async fn ollama_up() -> bool {
 }
 
 async fn system_ollama() -> bool {
-    Command::new("ollama")
+    quiet(&mut Command::new("ollama"))
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -376,6 +400,7 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
             cmd.env("LD_LIBRARY_PATH", format!("{}:{}", lib.display(), prev));
         }
     }
+    quiet(&mut cmd);
     let child = cmd
         .spawn()
         .map_err(|x| format!("Konnte Ollama nicht starten: {x}"))?;
@@ -507,7 +532,7 @@ async fn detect_gpu() -> (String, f64) {
 }
 
 async fn gpu_nvidia() -> Option<(String, f64)> {
-    let out = Command::new("nvidia-smi")
+    let out = quiet(&mut Command::new("nvidia-smi"))
         .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
         .output()
         .await
@@ -526,7 +551,7 @@ async fn gpu_nvidia() -> Option<(String, f64)> {
 }
 
 async fn gpu_macos() -> (String, f64) {
-    if let Ok(out) = Command::new("system_profiler")
+    if let Ok(out) = quiet(&mut Command::new("system_profiler"))
         .arg("SPDisplaysDataType")
         .output()
         .await
@@ -563,7 +588,7 @@ async fn gpu_macos() -> (String, f64) {
 }
 
 async fn gpu_windows() -> (String, f64) {
-    if let Ok(out) = Command::new("powershell")
+    if let Ok(out) = quiet(&mut Command::new("powershell"))
         .args([
             "-NoProfile",
             "-Command",
@@ -587,7 +612,7 @@ async fn gpu_windows() -> (String, f64) {
 
 async fn gpu_linux() -> (String, f64) {
     let mut name = String::new();
-    if let Ok(out) = Command::new("sh")
+    if let Ok(out) = quiet(&mut Command::new("sh"))
         .args(["-c", "lspci 2>/dev/null | grep -Ei 'vga|3d|display'"])
         .output()
         .await
@@ -697,6 +722,7 @@ pub async fn worker_start(
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    quiet(&mut cmd);
 
     let mut child = cmd
         .spawn()
@@ -752,6 +778,44 @@ pub async fn worker_stop(state: State<'_, Arc<Procs>>) -> Result<(), String> {
 #[tauri::command]
 pub async fn worker_running(state: State<'_, Arc<Procs>>) -> Result<bool, String> {
     Ok(state.worker.lock().await.is_some())
+}
+
+/* ------------------------- models directory ------------------------- */
+
+#[derive(Serialize)]
+pub struct ModelsDir {
+    pub path: String,
+    pub custom: bool,
+}
+
+#[tauri::command]
+pub fn models_dir_get(app: AppHandle) -> Result<ModelsDir, String> {
+    Ok(ModelsDir {
+        path: ollama_models_dir(&app).display().to_string(),
+        custom: models_override_file(&app).exists(),
+    })
+}
+
+/// Set a custom models directory (empty string resets to the managed default).
+#[tauri::command]
+pub fn models_dir_set(app: AppHandle, path: String) -> Result<ModelsDir, String> {
+    let file = models_override_file(&app);
+    let p = path.trim();
+    if p.is_empty() {
+        let _ = std::fs::remove_file(&file);
+    } else {
+        let target = PathBuf::from(p);
+        std::fs::create_dir_all(&target)
+            .map_err(|x| format!("Ordner nicht nutzbar: {x}"))?;
+        // verify it's writable before committing the choice
+        let probe = target.join(".aipg-write-test");
+        std::fs::write(&probe, b"ok")
+            .map_err(|x| format!("Kein Schreibzugriff auf den Ordner: {x}"))?;
+        let _ = std::fs::remove_file(&probe);
+        std::fs::create_dir_all(data_dir(&app)).map_err(e)?;
+        std::fs::write(&file, target.display().to_string()).map_err(e)?;
+    }
+    models_dir_get(app)
 }
 
 /* ------------------------- chat store (local JSON file) ------------------------- */

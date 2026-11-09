@@ -280,6 +280,58 @@ function applyModel(m) {
   toast("Model set to " + m);
 }
 
+// Download/update one Ollama model tag into the chosen models folder.
+async function pullModel(model) {
+  model = (model || "").trim();
+  if (!model) { toast("Modell-Tag eingeben"); return false; }
+  set("aipg_wmodel", model);
+  setStep("model", "active"); wprog(0, "Modell ziehen…");
+  try {
+    await invoke("ollama_ensure");
+    await invoke("ollama_pull", { model });
+    setStep("model", "done"); wprog(null, "Modell bereit ✓"); toast("Modell bereit");
+    refreshOllamaModels();
+    return true;
+  } catch (e) {
+    setStep("model", "error"); wprog(null, "⚠ " + emsg(e)); toast(emsg(e));
+    return false;
+  }
+}
+
+async function loadModelsDir() {
+  if (!TAURI.core) return;
+  try {
+    const d = await invoke("models_dir_get");
+    $("#models-dir").textContent = d.path;
+    $("#models-dir").title = d.path;
+    $("#btn-models-dir-reset").style.display = d.custom ? "" : "none";
+  } catch (e) {}
+}
+
+async function pickModelsDir() {
+  if (!TAURI.core) return;
+  let dir;
+  try {
+    dir = await invoke("plugin:dialog|open", {
+      options: { directory: true, multiple: false, title: "Modell-Speicherort wählen" },
+    });
+  } catch (e) { toast("Ordnerauswahl nicht verfügbar: " + emsg(e)); return; }
+  if (!dir) return; // cancelled
+  if (Array.isArray(dir)) dir = dir[0];
+  try {
+    const d = await invoke("models_dir_set", { path: dir });
+    $("#models-dir").textContent = d.path; $("#models-dir").title = d.path;
+    $("#btn-models-dir-reset").style.display = d.custom ? "" : "none";
+    toast("Speicherort gesetzt");
+  } catch (e) { toast(emsg(e)); }
+}
+
+async function resetModelsDir() {
+  try { await invoke("models_dir_set", { path: "" }); toast("Standard-Speicherort"); }
+  catch (e) { toast(emsg(e)); }
+  loadModelsDir();
+}
+
 function renderHardware(h) {
   $("#hwpanel").innerHTML =
     `<span><span class="k">RAM</span> <b>${h.ram_gb} GB</b></span>` +
@@ -287,10 +339,16 @@ function renderHardware(h) {
     `<span><span class="k">GPU</span> <b>${esc(h.gpu)}</b></span>` +
     (h.recommend
       ? `<span><span class="k">Suggested model</span> <b>${esc(h.recommend)}</b>` +
-        ` <button class="btn ghost" id="use-suggested" data-m="${esc(h.recommend)}">Use</button></span>`
+        ` <button class="btn ghost" id="use-suggested" data-m="${esc(h.recommend)}">Use</button>` +
+        ` <button class="btn ghost" id="dl-suggested" data-m="${esc(h.recommend)}">Download</button></span>`
       : "");
   const u = $("#use-suggested");
   if (u) u.onclick = () => applyModel(u.dataset.m);
+  const dls = $("#dl-suggested");
+  if (dls) dls.onclick = async () => {
+    dls.disabled = true; applyModel(dls.dataset.m);
+    await pullModel(dls.dataset.m); dls.disabled = false;
+  };
   if (!h.can_run_worker) {
     const b = $("#hwfallback"); b.style.display = "";
     b.innerHTML = esc(h.note) + ' <a href="#" id="gotochat"><b>Zum Grid-Chat →</b></a>';
@@ -318,6 +376,7 @@ async function loadWorker() {
   try { WORKER_RUNNING = await invoke("worker_running"); } catch (e) {}
   syncRunButtons();
   refreshOllamaModels();
+  loadModelsDir();
 }
 
 function syncRunButtons() {
@@ -426,13 +485,13 @@ function wireWorker() {
   };
 
   $("#btn-pull").onclick = async () => {
-    const model = $("#wmodel").value.trim(); if (!model) return toast("Modell-Tag eingeben");
-    set("aipg_wmodel", model);
-    $("#btn-pull").disabled = true; setStep("model", "active"); wprog(0, "Modell ziehen…");
-    try { await invoke("ollama_ensure"); await invoke("ollama_pull", { model }); setStep("model", "done"); wprog(null, "Modell bereit ✓"); toast("Modell bereit"); }
-    catch (e) { setStep("model", "error"); wprog(null, "⚠ " + emsg(e)); toast(emsg(e)); }
-    $("#btn-pull").disabled = false; refreshOllamaModels();
+    $("#btn-pull").disabled = true;
+    await pullModel($("#wmodel").value);
+    $("#btn-pull").disabled = false;
   };
+
+  $("#btn-models-dir").onclick = pickModelsDir;
+  $("#btn-models-dir-reset").onclick = resetModelsDir;
 
   $("#btn-start").onclick = async () => {
     const api_key = apiKey();

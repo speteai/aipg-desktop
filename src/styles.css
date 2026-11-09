@@ -560,3 +560,8 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
   *,*::before,*::after{transition:none !important}
   .step.active .dot{animation:none}
 }
+
+/* models-folder path chip */
+.path{font:var(--t-micro)/1.4 var(--mono);color:var(--fg);background:var(--code);
+  border:1px solid var(--bd);border-radius:var(--r);padding:3px 8px;max-width:48ch;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}

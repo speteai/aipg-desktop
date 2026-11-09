@@ -10,6 +10,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(procs.clone())
         .invoke_handler(tauri::generate_handler![
             worker::prereqs,
@@ -22,6 +23,8 @@ pub fn run() {
             worker::worker_start,
             worker::worker_stop,
             worker::worker_running,
+            worker::models_dir_get,
+            worker::models_dir_set,
             worker::chats_read,
             worker::chats_write,
         ])
