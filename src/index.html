@@ -166,7 +166,9 @@
           <span id="models-free" class="hint"></span>
         </div>
         <p class="hint">Where downloaded models are stored. Models are large — pick a drive with space.
-          Changing it applies to the next download; restart a running worker to switch.</p>
+          Changing it restarts Ollama and can move your existing models along (stop the worker first).</p>
+        <h3 class="sub">Installed models</h3>
+        <div id="local-models"><p class="muted">—</p></div>
       </div>
 
       <!-- step 3: run -->
@@ -231,13 +233,26 @@
         <p class="hint">Notifies you when a worker goes offline, enters maintenance, or recovers. Checks every 2 minutes.</p>
       </div>
       <div class="field" id="field-autostart">
-        <label><input type="checkbox" id="autostart"> Worker beim Programmstart automatisch starten</label>
-        <p class="hint">Startet Ollama und den zuletzt konfigurierten Worker direkt beim Öffnen der App (API-Key nötig).</p>
+        <label><input type="checkbox" id="autostart"> Start the worker automatically when the app opens</label>
+        <p class="hint">Starts Ollama and the last configured worker as soon as the app launches (needs an API key).
+          A worker that crashes is restarted automatically, up to 3 times in 10 minutes.</p>
+      </div>
+      <div class="field" id="field-loginstart">
+        <label><input type="checkbox" id="loginstart"> Launch AIPG Desktop when I sign in to this computer</label>
+        <p class="hint">Starts minimized in the tray. Combine with the option above to keep earning after a reboot.</p>
       </div>
       <div class="field" id="field-closetray">
-        <label><input type="checkbox" id="closetray"> Beim Schließen ins Tray minimieren</label>
-        <p class="hint">Fenster schließen beendet die App dann nicht — der Worker verdient im Hintergrund weiter.
-          Komplett beenden über Rechtsklick auf das Tray-Icon → „Beenden“.</p>
+        <label><input type="checkbox" id="closetray"> Minimize to tray when the window is closed</label>
+        <p class="hint">Closing the window then keeps the app (and a running worker) alive in the background.
+          Quit completely via right-click on the tray icon → “Quit”.</p>
+      </div>
+      <div class="field" id="field-update">
+        <label>Updates <span id="appver" class="muted"></span></label>
+        <div class="row">
+          <button class="btn" id="btn-update">Check for updates</button>
+          <button class="btn primary" id="btn-update-install" style="display:none">Install &amp; restart</button>
+        </div>
+        <p class="hint" id="updmsg">Updates are downloaded from GitHub Releases and verified against the app's signing key.</p>
       </div>
       <div class="field">
         <label>ntfy topic (optional — push to your phone too)</label>

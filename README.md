@@ -48,14 +48,19 @@ running a worker is optional.
   - downloads and runs a **sandboxed, managed Ollama** — no system install required,
   - detects your hardware (RAM / CPU / GPU) and **suggests a fitting model**, with a
     fallback to grid chat when the machine is too small,
-  - shows live download progress (GB and %), and lets you pick **where models are stored**.
+  - shows live download progress (GB and %), lets you pick **where models are stored**,
+    and lists installed models with their size so you can delete what you no longer need,
+  - restarts the worker automatically if it crashes.
 - **Overview / Models / Earnings** — spendable balance, workers online, den earned and
   jobs; live model list with prices; recent jobs plus a **local earnings-history graph**.
 - **Offline alerts** — native notifications when a worker goes offline, enters
   maintenance, or recovers (while the app is open), optionally also pushed to your phone
   via an [ntfy](https://ntfy.sh) topic.
 - **Runs in the background** — close to the system tray and keep the worker earning;
-  optionally auto-start the worker when the app opens.
+  optionally launch at login and auto-start the worker.
+- **Self-updating** — the app checks GitHub Releases for a newer version and installs it
+  in one click. Updates are signature-verified against a key baked into the app.
+  (On Linux this works for the AppImage; `.deb`/`.rpm` users update via a new package.)
 
 ## Security & privacy
 

@@ -568,3 +568,9 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 
 /* low free-space hint */
 .hint.warn{color:var(--warn)}
+
+/* installed local models */
+.sub{font:600 var(--t-micro)/1.3 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:var(--s4) 0 var(--s2)}
+.lmrow{display:flex;align-items:center;gap:var(--s3);padding:var(--s2) 0;border-bottom:1px solid var(--bd)}
+.lmrow .path{flex:1 1 auto;max-width:none}
+.lmrow .muted{min-width:7ch;text-align:right;font-family:var(--mono)}

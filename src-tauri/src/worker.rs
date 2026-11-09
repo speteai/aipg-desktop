@@ -25,6 +25,9 @@ const OLLAMA_TAG: &str = "v0.40.15";
 pub struct Procs {
     worker: Mutex<Option<Child>>,
     ollama: Mutex<Option<Child>>,
+    /// Bumped on every worker start, so the log reader of an older worker
+    /// can never clear (and thereby kill) a newer one.
+    worker_gen: std::sync::atomic::AtomicU64,
 }
 
 fn e<T: std::fmt::Display>(x: T) -> String {
@@ -156,7 +159,7 @@ pub async fn prereqs(app: AppHandle) -> Prereqs {
 #[tauri::command]
 pub async fn download_worker(app: AppHandle) -> Result<String, String> {
     let (asset, is_zip) = worker_asset()
-        .ok_or("Dein Betriebssystem/Architektur wird vom offiziellen Worker (v0.3.12) nicht abgedeckt.")?;
+        .ok_or("No official worker binary (v0.3.12) exists for this OS/architecture.")?;
     let base = format!("https://github.com/{WORKER_REPO}/releases/download/{WORKER_TAG}");
     let client = reqwest::Client::builder()
         .user_agent("aipg-desktop")
@@ -174,16 +177,16 @@ pub async fn download_worker(app: AppHandle) -> Result<String, String> {
     let entry = manifest["assets"]
         .as_array()
         .and_then(|a| a.iter().find(|x| x["name"] == asset))
-        .ok_or("Asset nicht im Release-Manifest gefunden.")?;
+        .ok_or("Asset not found in the release manifest.")?;
     let want_sha = entry["sha256"].as_str().unwrap_or("").to_lowercase();
     let total = entry["bytes"].as_u64().unwrap_or(0);
     if want_sha.is_empty() {
-        return Err("Kein SHA256 im Manifest — Abbruch aus Sicherheitsgründen.".into());
+        return Err("No SHA-256 in the manifest — aborting for safety.".into());
     }
 
     let resp = client.get(format!("{base}/{asset}")).send().await.map_err(e)?;
     if !resp.status().is_success() {
-        return Err(format!("Download fehlgeschlagen: HTTP {}", resp.status()));
+        return Err(format!("Download failed: HTTP {}", resp.status()));
     }
     let mut hasher = Sha256::new();
     let mut buf: Vec<u8> = Vec::with_capacity(total as usize);
@@ -199,7 +202,7 @@ pub async fn download_worker(app: AppHandle) -> Result<String, String> {
     let got = hex::encode(hasher.finalize());
     if got != want_sha {
         return Err(format!(
-            "SHA256 stimmt nicht überein (erwartet {}…, erhalten {}…) — verworfen.",
+            "SHA-256 mismatch (expected {}…, got {}…) — discarded.",
             &want_sha[..12.min(want_sha.len())],
             &got[..12.min(got.len())]
         ));
@@ -227,7 +230,7 @@ fn extract_single_from_zip(bytes: &[u8], dest: &PathBuf) -> Result<(), String> {
             best = Some((f.name().to_string(), f.size()));
         }
     }
-    let (name, _) = best.ok_or("Zip enthält keine Datei.")?;
+    let (name, _) = best.ok_or("Zip archive contains no file.")?;
     let mut f = zip.by_name(&name).map_err(e)?;
     let mut out = std::fs::File::create(dest).map_err(e)?;
     std::io::copy(&mut f, &mut out).map_err(e)?;
@@ -272,7 +275,7 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
     if managed_ollama_bin(&app).is_some() {
         return Ok("already".into());
     }
-    let (asset, kind) = ollama_asset().ok_or("Ollama wird für dieses OS/Arch nicht angeboten.")?;
+    let (asset, kind) = ollama_asset().ok_or("Ollama is not available for this OS/architecture.")?;
     let base = format!("https://github.com/ollama/ollama/releases/download/{OLLAMA_TAG}");
     let client = reqwest::Client::builder()
         .user_agent("aipg-desktop")
@@ -293,7 +296,7 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
         .find(|l| l.trim_end().ends_with(asset))
         .and_then(|l| l.split_whitespace().next())
         .map(|s| s.to_lowercase())
-        .ok_or("Checksumme für Ollama-Asset nicht gefunden.")?;
+        .ok_or("Checksum for the Ollama asset not found.")?;
 
     let root = ollama_root(&app);
     std::fs::create_dir_all(&root).map_err(e)?;
@@ -302,7 +305,7 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
     // stream to disk (archives are up to ~1.5 GB — never buffer in RAM)
     let resp = client.get(format!("{base}/{asset}")).send().await.map_err(e)?;
     if !resp.status().is_success() {
-        return Err(format!("Ollama-Download fehlgeschlagen: HTTP {}", resp.status()));
+        return Err(format!("Ollama download failed: HTTP {}", resp.status()));
     }
     let total = resp.content_length().unwrap_or(0);
     let mut file = tokio::fs::File::create(&tmp).await.map_err(e)?;
@@ -328,7 +331,7 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
     if got != want_sha {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!(
-            "Ollama-SHA256 stimmt nicht (erwartet {}…) — verworfen.",
+            "Ollama SHA-256 mismatch (expected {}…) — discarded.",
             &want_sha[..12.min(want_sha.len())]
         ));
     }
@@ -343,7 +346,7 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
     let _ = std::fs::remove_file(&tmp);
 
     let bin = managed_ollama_bin(&app)
-        .ok_or("Entpackt, aber keine ollama-Binary gefunden.")?;
+        .ok_or("Extracted, but no ollama binary was found.")?;
     make_executable(&bin)?;
     Ok(bin.to_string_lossy().into_owned())
 }
@@ -380,7 +383,7 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
     } else if system_ollama().await {
         PathBuf::from("ollama")
     } else {
-        return Err("Ollama ist nicht eingerichtet. Klicke „Set up Ollama“ (lädt es automatisch).".into());
+        return Err("Ollama is not set up. Click “Set up Ollama” (downloads it automatically).".into());
     };
 
     let models = ollama_models_dir(&app);
@@ -403,7 +406,7 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
     quiet(&mut cmd);
     let child = cmd
         .spawn()
-        .map_err(|x| format!("Konnte Ollama nicht starten: {x}"))?;
+        .map_err(|x| format!("Could not start Ollama: {x}"))?;
     *state.ollama.lock().await = Some(child);
 
     for _ in 0..60 {
@@ -413,7 +416,7 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
             return Ok(());
         }
     }
-    Err("Ollama gestartet, antwortet aber nicht auf Port 11434.".into())
+    Err("Ollama was started but does not answer on port 11434.".into())
 }
 
 #[tauri::command]
@@ -430,6 +433,53 @@ pub async fn ollama_models() -> Result<Vec<String>, String> {
         .as_array()
         .map(|a| a.iter().filter_map(|m| m["name"].as_str().map(String::from)).collect())
         .unwrap_or_default())
+}
+
+#[derive(Serialize)]
+pub struct LocalModel {
+    name: String,
+    size: u64,
+}
+
+/// Installed local models with their on-disk size.
+#[tauri::command]
+pub async fn ollama_list() -> Result<Vec<LocalModel>, String> {
+    let v: serde_json::Value = reqwest::Client::new()
+        .get(format!("{OLLAMA}/api/tags"))
+        .send()
+        .await
+        .map_err(e)?
+        .json()
+        .await
+        .map_err(e)?;
+    Ok(v["models"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| {
+                    Some(LocalModel {
+                        name: m["name"].as_str()?.to_string(),
+                        size: m["size"].as_u64().unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn ollama_delete(model: String) -> Result<(), String> {
+    let r = reqwest::Client::new()
+        .delete(format!("{OLLAMA}/api/delete"))
+        .json(&serde_json::json!({ "name": model, "model": model }))
+        .send()
+        .await
+        .map_err(e)?;
+    if r.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("Could not delete model: HTTP {}", r.status()))
+    }
 }
 
 #[tauri::command]
@@ -497,16 +547,16 @@ pub async fn hardware() -> Hardware {
         (
             String::new(),
             false,
-            "Zu wenig Speicher für einen lokalen Worker. Nutze stattdessen den Chat mit „Grid / Auto“ — die Berechnung läuft dann remote auf dem Grid, nicht auf diesem Gerät.".into(),
+            "Not enough memory to run a local worker. Use Chat with “Grid / Auto” instead — inference then runs on the grid, not on this machine.".into(),
         )
     } else if budget < 6.0 {
-        ("llama3.2:1b".into(), true, "Kleines Modell für knappen Speicher.".into())
+        ("llama3.2:1b".into(), true, "Small model for tight memory.".into())
     } else if budget < 10.0 {
-        ("llama3.2:3b".into(), true, "Solides kleines Modell.".into())
+        ("llama3.2:3b".into(), true, "Solid small model.".into())
     } else if budget < 20.0 {
-        ("qwen3:8b".into(), true, "Guter Allrounder.".into())
+        ("qwen3:8b".into(), true, "Good all-rounder.".into())
     } else {
-        ("qwen3:14b".into(), true, "Reichlich Speicher — größeres Modell möglich.".into())
+        ("qwen3:14b".into(), true, "Plenty of memory — a larger model is possible.".into())
     };
 
     Hardware {
@@ -588,6 +638,45 @@ async fn gpu_macos() -> (String, f64) {
 }
 
 async fn gpu_windows() -> (String, f64) {
+    // Preferred: the display-adapter class in the registry carries the real
+    // 64-bit VRAM size (Win32_VideoController.AdapterRAM is capped at 4 GB).
+    const REG: &str = r#"Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue | ForEach-Object { '{0}|{1}' -f $_.DriverDesc, $_.'HardwareInformation.qwMemorySize' }"#;
+    if let Ok(out) = quiet(&mut Command::new("powershell"))
+        .args(["-NoProfile", "-Command", REG])
+        .output()
+        .await
+    {
+        let s = String::from_utf8_lossy(&out.stdout);
+        let mut labels: Vec<String> = Vec::new();
+        let mut best = 0.0_f64;
+        for line in s.lines() {
+            let mut it = line.trim().splitn(2, '|');
+            let name = it.next().unwrap_or("").trim();
+            if name.is_empty() {
+                continue;
+            }
+            let gb = it
+                .next()
+                .and_then(|x| x.trim().parse::<f64>().ok())
+                .map(|b| b / 1_073_741_824.0)
+                .unwrap_or(0.0);
+            let label = if gb >= 1.0 {
+                format!("{name} ({gb:.0} GB)")
+            } else {
+                name.to_string()
+            };
+            if !labels.contains(&label) {
+                labels.push(label);
+            }
+            if gb > best {
+                best = gb;
+            }
+        }
+        if !labels.is_empty() {
+            return (labels.join(", "), best);
+        }
+    }
+    // Fallback: names only.
     if let Ok(out) = quiet(&mut Command::new("powershell"))
         .args([
             "-NoProfile",
@@ -694,10 +783,10 @@ pub async fn worker_start(
     }
     let bin = worker_bin(&app);
     if !bin.exists() {
-        return Err("Worker-Binary nicht gefunden — zuerst herunterladen.".into());
+        return Err("Worker binary not found — download it first.".into());
     }
     if cfg.api_key.trim().is_empty() || cfg.model.trim().is_empty() {
-        return Err("API-Key und Modell sind erforderlich.".into());
+        return Err("API key and model are required.".into());
     }
     let name = if cfg.worker_name.trim().is_empty() {
         "AIPG-Desktop-Worker".to_string()
@@ -724,9 +813,13 @@ pub async fn worker_start(
         .kill_on_drop(true);
     quiet(&mut cmd);
 
+    let my_gen = state
+        .worker_gen
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
     let mut child = cmd
         .spawn()
-        .map_err(|x| format!("Worker-Start fehlgeschlagen: {x}"))?;
+        .map_err(|x| format!("Failed to start the worker: {x}"))?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     *state.worker.lock().await = Some(child);
@@ -741,14 +834,16 @@ pub async fn worker_start(
             while let Ok(Some(line)) = lines.next_line().await {
                 let _ = app2.emit("worker-log", line);
             }
-            procs.worker.lock().await.take();
-            let _ = app2.emit("worker-exit", true);
+            if procs.worker_gen.load(std::sync::atomic::Ordering::SeqCst) == my_gen {
+                procs.worker.lock().await.take();
+                let _ = app2.emit("worker-exit", true);
+            }
         });
     }
     if let Some(err) = stderr {
         pump(app.clone(), err, true);
     }
-    let _ = app.emit("worker-log", "[desktop] worker gestartet.");
+    let _ = app.emit("worker-log", "[desktop] worker started.");
     Ok(())
 }
 
@@ -787,6 +882,8 @@ pub struct ModelsDir {
     pub path: String,
     pub custom: bool,
     pub free_bytes: u64,
+    /// true when the app-managed Ollama had to be stopped to switch folders
+    pub ollama_stopped: bool,
 }
 
 /// Bytes available on the volume that holds `path` (0 if it can't be determined).
@@ -819,31 +916,130 @@ pub fn models_dir_get(app: AppHandle) -> Result<ModelsDir, String> {
     }
     Ok(ModelsDir {
         free_bytes: free_space_for(&probe),
+        ollama_stopped: false,
         path: path.display().to_string(),
         custom: models_override_file(&app).exists(),
     })
 }
 
+/// Move everything under `src` into `dst` (rename when possible, copy across
+/// volumes otherwise). Existing files in `dst` are kept.
+fn move_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            move_tree(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+        let _ = std::fs::remove_dir(src);
+        Ok(())
+    } else {
+        if dst.exists() {
+            return std::fs::remove_file(src);
+        }
+        if std::fs::rename(src, dst).is_err() {
+            std::fs::copy(src, dst)?;
+            std::fs::remove_file(src)?;
+        }
+        Ok(())
+    }
+}
+
 /// Set a custom models directory (empty string resets to the managed default).
+/// Stops the app-managed Ollama so the new folder takes effect on its next
+/// start, and optionally moves the already downloaded models along.
 #[tauri::command]
-pub fn models_dir_set(app: AppHandle, path: String) -> Result<ModelsDir, String> {
+pub async fn models_dir_set(
+    app: AppHandle,
+    state: State<'_, Arc<Procs>>,
+    path: String,
+    move_existing: bool,
+) -> Result<ModelsDir, String> {
+    if state.worker.lock().await.is_some() {
+        return Err("Stop the worker before changing the models folder.".into());
+    }
+    let old = ollama_models_dir(&app);
     let file = models_override_file(&app);
     let p = path.trim();
+    let target = if p.is_empty() {
+        ollama_root(&app).join("models")
+    } else {
+        PathBuf::from(p)
+    };
+    std::fs::create_dir_all(&target).map_err(|x| format!("Folder cannot be used: {x}"))?;
+    // verify it's writable before committing the choice
+    let probe = target.join(".aipg-write-test");
+    std::fs::write(&probe, b"ok").map_err(|x| format!("No write access to the folder: {x}"))?;
+    let _ = std::fs::remove_file(&probe);
+
+    // Ollama reads OLLAMA_MODELS only at start — stop ours so it restarts clean.
+    let mut stopped = false;
+    if let Some(mut c) = state.ollama.lock().await.take() {
+        let _ = c.start_kill();
+        let _ = c.wait().await;
+        stopped = true;
+    }
+
+    if move_existing && old != target && old.exists() {
+        let (o, t) = (old.clone(), target.clone());
+        tokio::task::spawn_blocking(move || move_tree(&o, &t))
+            .await
+            .map_err(e)?
+            .map_err(|x| format!("Moving models failed: {x}"))?;
+    }
+
     if p.is_empty() {
         let _ = std::fs::remove_file(&file);
     } else {
-        let target = PathBuf::from(p);
-        std::fs::create_dir_all(&target)
-            .map_err(|x| format!("Ordner nicht nutzbar: {x}"))?;
-        // verify it's writable before committing the choice
-        let probe = target.join(".aipg-write-test");
-        std::fs::write(&probe, b"ok")
-            .map_err(|x| format!("Kein Schreibzugriff auf den Ordner: {x}"))?;
-        let _ = std::fs::remove_file(&probe);
         std::fs::create_dir_all(data_dir(&app)).map_err(e)?;
         std::fs::write(&file, target.display().to_string()).map_err(e)?;
     }
-    models_dir_get(app)
+    let mut d = models_dir_get(app)?;
+    d.ollama_stopped = stopped;
+    Ok(d)
+}
+
+/* ------------------------- self-update ------------------------- */
+
+/// Returns the new version string when an update is available.
+#[tauri::command]
+pub async fn update_check(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app.updater().map_err(e)?.check().await.map_err(e)?;
+    Ok(update.map(|u| u.version.clone()))
+}
+
+/// Download the signed update, stop child processes, install and restart.
+#[tauri::command]
+pub async fn update_install(app: AppHandle, state: State<'_, Arc<Procs>>) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app
+        .updater()
+        .map_err(e)?
+        .check()
+        .await
+        .map_err(e)?
+        .ok_or("Already up to date.")?;
+    let mut received: u64 = 0;
+    let app2 = app.clone();
+    let bytes = update
+        .download(
+            move |chunk, total| {
+                received += chunk as u64;
+                let _ = app2.emit(
+                    "update-progress",
+                    serde_json::json!({ "received": received, "total": total }),
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(e)?;
+    kill_all(state.inner()).await;
+    update.install(bytes).map_err(e)?;
+    app.restart();
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 /* ------------------------- app config (small JSON file) ------------------------- */

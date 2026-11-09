@@ -23,6 +23,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .manage(procs.clone())
         .invoke_handler(tauri::generate_handler![
             worker::prereqs,
@@ -31,6 +36,10 @@ pub fn run() {
             worker::setup_ollama,
             worker::ollama_ensure,
             worker::ollama_models,
+            worker::ollama_list,
+            worker::ollama_delete,
+            worker::update_check,
+            worker::update_install,
             worker::ollama_pull,
             worker::worker_start,
             worker::worker_stop,
@@ -45,8 +54,8 @@ pub fn run() {
         .setup(|app| {
             // System tray: keep the worker earning while the window is closed.
             let handle = app.handle().clone();
-            let show = MenuItem::with_id(&handle, "show", "AIPG Desktop öffnen", true, None::<&str>)?;
-            let quit = MenuItem::with_id(&handle, "quit", "Beenden", true, None::<&str>)?;
+            let show = MenuItem::with_id(&handle, "show", "Open AIPG Desktop", true, None::<&str>)?;
+            let quit = MenuItem::with_id(&handle, "quit", "Quit", true, None::<&str>)?;
             let menu = MenuBuilder::new(&handle).item(&show).item(&quit).build()?;
             let icon = app.default_window_icon().unwrap().clone();
             let _ = TrayIconBuilder::with_id("main")
@@ -70,6 +79,12 @@ pub fn run() {
                     }
                 })
                 .build(&handle)?;
+            // Launched at login (autostart passes --minimized): stay in the tray.
+            if std::env::args().any(|a| a == "--minimized") {
+                if let Some(w) = handle.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -87,7 +102,7 @@ pub fn run() {
         .run(move |_app, event| {
             // Make sure no worker/ollama process is left running, whether the app
             // exits by closing the last window (ExitRequested) or via the tray's
-            // "Beenden" → app.exit(0) (Exit). kill_all is idempotent.
+            // "Quit" → app.exit(0) (Exit). kill_all is idempotent.
             if matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
