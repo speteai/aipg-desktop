@@ -786,12 +786,40 @@ pub async fn worker_running(state: State<'_, Arc<Procs>>) -> Result<bool, String
 pub struct ModelsDir {
     pub path: String,
     pub custom: bool,
+    pub free_bytes: u64,
+}
+
+/// Bytes available on the volume that holds `path` (0 if it can't be determined).
+fn free_space_for(path: &std::path::Path) -> u64 {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let p = path.to_string_lossy();
+    let mut best: Option<(usize, u64)> = None;
+    for d in disks.list() {
+        let mp = d.mount_point().to_string_lossy();
+        if p.starts_with(mp.as_ref()) {
+            let len = mp.len();
+            if best.map_or(true, |(b, _)| len > b) {
+                best = Some((len, d.available_space()));
+            }
+        }
+    }
+    best.map(|(_, s)| s).unwrap_or(0)
 }
 
 #[tauri::command]
 pub fn models_dir_get(app: AppHandle) -> Result<ModelsDir, String> {
+    let path = ollama_models_dir(&app);
+    // free space of the nearest existing ancestor (the dir itself may not exist yet)
+    let mut probe = path.clone();
+    while !probe.exists() {
+        match probe.parent() {
+            Some(p) => probe = p.to_path_buf(),
+            None => break,
+        }
+    }
     Ok(ModelsDir {
-        path: ollama_models_dir(&app).display().to_string(),
+        free_bytes: free_space_for(&probe),
+        path: path.display().to_string(),
         custom: models_override_file(&app).exists(),
     })
 }
@@ -816,6 +844,37 @@ pub fn models_dir_set(app: AppHandle, path: String) -> Result<ModelsDir, String>
         std::fs::write(&file, target.display().to_string()).map_err(e)?;
     }
     models_dir_get(app)
+}
+
+/* ------------------------- app config (small JSON file) ------------------------- */
+
+fn config_path(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("config.json")
+}
+
+#[tauri::command]
+pub fn config_get(app: AppHandle) -> Result<String, String> {
+    match std::fs::read_to_string(config_path(&app)) {
+        Ok(s) => Ok(s),
+        Err(ref err) if err.kind() == std::io::ErrorKind::NotFound => Ok("{}".into()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn config_set(app: AppHandle, data: String) -> Result<(), String> {
+    std::fs::create_dir_all(data_dir(&app)).map_err(e)?;
+    std::fs::write(config_path(&app), data.as_bytes()).map_err(e)
+}
+
+/// Read a boolean flag from config.json without failing (used by the tray/close
+/// handler, which runs outside the async command layer).
+pub fn config_bool(app: &AppHandle, key: &str, default: bool) -> bool {
+    std::fs::read_to_string(config_path(app))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get(key).and_then(|b| b.as_bool()))
+        .unwrap_or(default)
 }
 
 /* ------------------------- chat store (local JSON file) ------------------------- */

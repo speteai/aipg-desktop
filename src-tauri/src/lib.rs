@@ -1,7 +1,19 @@
 use std::sync::Arc;
 
+use tauri::menu::{MenuBuilder, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::Manager;
+
 mod worker;
 use worker::Procs;
+
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,14 +37,61 @@ pub fn run() {
             worker::worker_running,
             worker::models_dir_get,
             worker::models_dir_set,
+            worker::config_get,
+            worker::config_set,
             worker::chats_read,
             worker::chats_write,
         ])
+        .setup(|app| {
+            // System tray: keep the worker earning while the window is closed.
+            let handle = app.handle().clone();
+            let show = MenuItem::with_id(&handle, "show", "AIPG Desktop öffnen", true, None::<&str>)?;
+            let quit = MenuItem::with_id(&handle, "quit", "Beenden", true, None::<&str>)?;
+            let menu = MenuBuilder::new(&handle).item(&show).item(&quit).build()?;
+            let icon = app.default_window_icon().unwrap().clone();
+            let _ = TrayIconBuilder::with_id("main")
+                .icon(icon)
+                .tooltip("AIPG Desktop")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => show_main(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main(tray.app_handle());
+                    }
+                })
+                .build(&handle)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Default: hide to tray instead of quitting, so a running worker
+                // keeps earning. Disable via Settings → "close to tray".
+                if worker::config_bool(window.app_handle(), "close_to_tray", true) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(move |_app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                // Make sure no worker/ollama process is left running.
+            // Make sure no worker/ollama process is left running, whether the app
+            // exits by closing the last window (ExitRequested) or via the tray's
+            // "Beenden" → app.exit(0) (Exit). kill_all is idempotent.
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
                 let p = procs.clone();
                 tauri::async_runtime::block_on(async move {
                     worker::kill_all(&p).await;

@@ -163,6 +163,7 @@
           <code id="models-dir" class="path">…</code>
           <button class="btn ghost" id="btn-models-dir">Change…</button>
           <button class="btn ghost" id="btn-models-dir-reset" style="display:none">Default</button>
+          <span id="models-free" class="hint"></span>
         </div>
         <p class="hint">Where downloaded models are stored. Models are large — pick a drive with space.
           Changing it applies to the next download; restart a running worker to switch.</p>
@@ -205,6 +206,8 @@
     <section class="view" id="view-earnings">
       <header class="vh"><h1>Earnings</h1><button class="btn" id="refresh-earnings" aria-label="Refresh">Refresh</button></header>
       <div class="stats" id="estats"></div>
+      <h2 class="sec">History</h2>
+      <div id="earnchart"><p class="muted">—</p></div>
       <h2 class="sec">Recent jobs</h2>
       <div class="tablewrap"><table id="jobs"><thead><tr>
         <th>when</th><th>model</th><th>type</th><th>den</th><th>units</th><th>dur</th>
@@ -226,6 +229,15 @@
       <div class="field">
         <label><input type="checkbox" id="alerts"> Offline alerts (native notifications while the app is open)</label>
         <p class="hint">Notifies you when a worker goes offline, enters maintenance, or recovers. Checks every 2 minutes.</p>
+      </div>
+      <div class="field" id="field-autostart">
+        <label><input type="checkbox" id="autostart"> Worker beim Programmstart automatisch starten</label>
+        <p class="hint">Startet Ollama und den zuletzt konfigurierten Worker direkt beim Öffnen der App (API-Key nötig).</p>
+      </div>
+      <div class="field" id="field-closetray">
+        <label><input type="checkbox" id="closetray"> Beim Schließen ins Tray minimieren</label>
+        <p class="hint">Fenster schließen beendet die App dann nicht — der Worker verdient im Hintergrund weiter.
+          Komplett beenden über Rechtsklick auf das Tray-Icon → „Beenden“.</p>
       </div>
       <div class="field">
         <label>ntfy topic (optional — push to your phone too)</label>

@@ -80,6 +80,13 @@ function setConn(state, label) {
 
 /* ---------- renderers ---------- */
 function money(v) { return v == null ? "—" : "$" + Number(v).toFixed(3); }
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1073741824).toFixed(1) + " GB";
+  if (n >= 1e6) return (n / 1048576).toFixed(0) + " MB";
+  if (n >= 1e3) return (n / 1024).toFixed(0) + " KB";
+  return n + " B";
+}
 
 async function loadOverview() {
   const hasKey = !!apiKey();
@@ -153,6 +160,38 @@ async function loadModels() {
   } catch (e) { $("#imgmodels").innerHTML = '<p class="muted">—</p>'; }
 }
 
+/* ---------- earnings history (local, per-device) ---------- */
+function loadEarnHist() { try { return JSON.parse(get("aipg_earnhist") || "[]"); } catch (e) { return []; } }
+function recordEarn(totalDen) {
+  if (totalDen == null) return loadEarnHist();
+  let h = loadEarnHist();
+  const day = new Date().toISOString().slice(0, 10);
+  if (h.length && h[h.length - 1].d === day) h[h.length - 1].v = totalDen; // keep latest for today
+  else h.push({ d: day, v: totalDen });
+  if (h.length > 400) h = h.slice(-400);
+  set("aipg_earnhist", JSON.stringify(h));
+  return h;
+}
+function renderEarnHistory(h) {
+  const box = $("#earnchart"); if (!box) return;
+  if (!h || h.length < 2) {
+    box.innerHTML = '<p class="muted">Die Kurve entsteht über die nächsten Tage — je öfter die App läuft, desto mehr Punkte.</p>';
+    return;
+  }
+  const W = 560, H = 120, pad = 10;
+  const vals = h.map((p) => p.v);
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1, n = h.length;
+  const x = (i) => pad + i * (W - 2 * pad) / (n - 1);
+  const y = (v) => H - pad - (v - min) / span * (H - 2 * pad);
+  const d = h.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+  const last = h[n - 1].v, delta = h[n - 1].v - h[n - 2].v;
+  box.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Den earned over time">` +
+    `<path d="${d}" fill="none" stroke="var(--acc)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` +
+    `</svg>` +
+    `<p class="hint">Total den: <b>${last}</b> · letzter Zuwachs: <b>${delta >= 0 ? "+" : ""}${delta}</b> · ${n} Datenpunkte (nur lokal gespeichert)</p>`;
+}
+
 async function loadEarnings() {
   try {
     const d = await api("/account/jobs");
@@ -160,6 +199,7 @@ async function loadEarnings() {
     $("#estats").innerHTML = `
       ${stat("Total den", d.total_den ?? 0, "green")}
       ${stat("Jobs", jobs.length, "blue")}`;
+    renderEarnHistory(recordEarn(d.total_den));
     const tb = $("#jobs tbody");
     tb.innerHTML = jobs.slice(0, 50).map((j) => `<tr>
       <td>${j.ts ? new Date(j.ts).toLocaleString() : (j.timestamp || "—")}</td>
@@ -169,6 +209,7 @@ async function loadEarnings() {
       || '<tr><td colspan="6" class="muted">No jobs yet.</td></tr>';
   } catch (e) {
     $("#estats").innerHTML = "";
+    renderEarnHistory(loadEarnHist());
     $("#jobs tbody").innerHTML = `<tr><td colspan="6" class="muted">${e.message === "no-key" ? "Add an API key in Settings." : esc(e.message)}</td></tr>`;
   }
 }
@@ -280,11 +321,32 @@ function applyModel(m) {
   toast("Model set to " + m);
 }
 
+let PULL_FRAC = 0;
+
+// Confirm dialog via the dialog plugin (falls back to proceeding if unavailable).
+async function askConfirm(message, title) {
+  try {
+    return await invoke("plugin:dialog|confirm", { message, title: title || "AIPG Desktop" });
+  } catch (e) { return true; }
+}
+
 // Download/update one Ollama model tag into the chosen models folder.
 async function pullModel(model) {
   model = (model || "").trim();
   if (!model) { toast("Modell-Tag eingeben"); return false; }
+  // free-space guard: models are multi-GB, warn before a doomed download
+  try {
+    const d = await invoke("models_dir_get");
+    if (d && d.free_bytes && d.free_bytes < 5 * 1073741824) {
+      const ok = await askConfirm(
+        `Nur ${fmtBytes(d.free_bytes)} frei in:\n${d.path}\n\nModelle sind oft 2–10 GB groß. Trotzdem herunterladen? ` +
+        `(Speicherort unter „Models folder → Change…“ ändern.)`,
+        "Wenig Speicherplatz");
+      if (!ok) { toast("Abgebrochen — Speicherort ändern"); return false; }
+    }
+  } catch (e) {}
   set("aipg_wmodel", model);
+  PULL_FRAC = 0;
   setStep("model", "active"); wprog(0, "Modell ziehen…");
   try {
     await invoke("ollama_ensure");
@@ -298,14 +360,20 @@ async function pullModel(model) {
   }
 }
 
+function showModelsDir(d) {
+  $("#models-dir").textContent = d.path;
+  $("#models-dir").title = d.path;
+  $("#btn-models-dir-reset").style.display = d.custom ? "" : "none";
+  const f = $("#models-free");
+  if (f) {
+    const low = d.free_bytes && d.free_bytes < 5 * 1073741824;
+    f.textContent = d.free_bytes ? `${fmtBytes(d.free_bytes)} frei` : "";
+    f.className = "hint" + (low ? " warn" : "");
+  }
+}
 async function loadModelsDir() {
   if (!TAURI.core) return;
-  try {
-    const d = await invoke("models_dir_get");
-    $("#models-dir").textContent = d.path;
-    $("#models-dir").title = d.path;
-    $("#btn-models-dir-reset").style.display = d.custom ? "" : "none";
-  } catch (e) {}
+  try { showModelsDir(await invoke("models_dir_get")); } catch (e) {}
 }
 
 async function pickModelsDir() {
@@ -319,9 +387,7 @@ async function pickModelsDir() {
   if (!dir) return; // cancelled
   if (Array.isArray(dir)) dir = dir[0];
   try {
-    const d = await invoke("models_dir_set", { path: dir });
-    $("#models-dir").textContent = d.path; $("#models-dir").title = d.path;
-    $("#btn-models-dir-reset").style.display = d.custom ? "" : "none";
+    showModelsDir(await invoke("models_dir_set", { path: dir }));
     toast("Speicherort gesetzt");
   } catch (e) { toast(emsg(e)); }
 }
@@ -453,8 +519,17 @@ function wireWorker() {
   listen("ollama-pull", (e) => {
     const j = e.payload || {};
     setStep("model", "active");
-    const pct = (j.total && j.completed != null) ? j.completed / j.total : null;
-    wprog(pct, "Modell: " + (j.status || "pulling…"));
+    const st = j.status || "pulling…";
+    if (j.total && j.completed != null && j.total > 0) {
+      PULL_FRAC = j.completed / j.total;
+      wprog(PULL_FRAC,
+        `Modell laden · ${fmtBytes(j.completed)} / ${fmtBytes(j.total)} · ${Math.round(PULL_FRAC * 100)} %`);
+    } else if (st === "success") {
+      wprog(1, "Modell bereit ✓");
+    } else {
+      // manifest / verify / write phases carry no byte counts — keep the bar, update text
+      wprog(PULL_FRAC || 0.03, "Modell: " + st);
+    }
   });
   listen("worker-log", (e) => logLine(String(e.payload)));
   listen("worker-exit", () => {
@@ -877,6 +952,18 @@ document.addEventListener("DOMContentLoaded", () => {
     startPolling();
   };
 
+  // in-app-only settings: auto-start worker + close-to-tray
+  if (TAURI.core) {
+    $("#autostart").checked = get("aipg_autostart") === "1";
+    $("#autostart").onchange = (e) => set("aipg_autostart", e.target.checked ? "1" : "0");
+    cfgGet().then((c) => { $("#closetray").checked = c.close_to_tray !== false; });
+    $("#closetray").onchange = (e) => cfgPatch("close_to_tray", e.target.checked);
+  } else {
+    const fa = $("#field-autostart"), fc = $("#field-closetray");
+    if (fa) fa.style.display = "none";
+    if (fc) fc.style.display = "none";
+  }
+
   // external links
   document.body.addEventListener("click", (e) => {
     const a = e.target.closest("[data-ext]");
@@ -900,4 +987,19 @@ document.addEventListener("DOMContentLoaded", () => {
   show("overview");
   startPolling();
   checkNewModels();
+  bootAutostart();
 });
+
+/* ---------- app config (in-app persistence via Rust) ---------- */
+async function cfgGet() { try { return JSON.parse((await invoke("config_get")) || "{}"); } catch (e) { return {}; } }
+async function cfgSet(obj) { try { await invoke("config_set", { data: JSON.stringify(obj) }); } catch (e) {} }
+async function cfgPatch(key, val) { const c = await cfgGet(); c[key] = val; await cfgSet(c); }
+
+async function bootAutostart() {
+  if (!TAURI.core || get("aipg_autostart") !== "1" || !apiKey()) return;
+  try { if (await invoke("worker_running")) return; } catch (e) { return; }
+  show("worker"); // populates fields + lets the user watch progress
+  $("#wname2").value = get("aipg_wname") || "";
+  $("#wmodel2").value = get("aipg_wmodel") || "qwen3:8b";
+  autoStartWorker();
+}
