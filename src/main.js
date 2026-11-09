@@ -274,19 +274,30 @@ async function refreshOllamaModels() {
   } catch (e) {}
 }
 
+function applyModel(m) {
+  if (!m) return;
+  $("#wmodel2").value = m; $("#wmodel").value = m; set("aipg_wmodel", m);
+  toast("Model set to " + m);
+}
+
 function renderHardware(h) {
   $("#hwpanel").innerHTML =
     `<span><span class="k">RAM</span> <b>${h.ram_gb} GB</b></span>` +
     `<span><span class="k">CPU</span> <b>${esc(h.cpu)}</b></span>` +
     `<span><span class="k">GPU</span> <b>${esc(h.gpu)}</b></span>` +
-    (h.recommend ? `<span><span class="k">Suggested model</span> <b>${esc(h.recommend)}</b></span>` : "");
+    (h.recommend
+      ? `<span><span class="k">Suggested model</span> <b>${esc(h.recommend)}</b>` +
+        ` <button class="btn ghost" id="use-suggested" data-m="${esc(h.recommend)}">Use</button></span>`
+      : "");
+  const u = $("#use-suggested");
+  if (u) u.onclick = () => applyModel(u.dataset.m);
   if (!h.can_run_worker) {
     const b = $("#hwfallback"); b.style.display = "";
     b.innerHTML = esc(h.note) + ' <a href="#" id="gotochat"><b>Zum Grid-Chat →</b></a>';
     const g = $("#gotochat"); if (g) g.onclick = (e) => { e.preventDefault(); show("chat"); };
   } else {
     $("#hwfallback").style.display = "none";
-    // prefill recommended model if the user hasn't chosen one
+    // prefill recommended model only if the user hasn't chosen one yet
     if (h.recommend && !get("aipg_wmodel")) { $("#wmodel2").value = h.recommend; $("#wmodel").value = h.recommend; }
   }
 }

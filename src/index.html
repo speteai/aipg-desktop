@@ -9,13 +9,13 @@
 <body>
   <nav class="side">
     <div class="brand"><img src="aipg-logo.png" alt="" class="logo"><span>AIPG <small>Desktop</small></span></div>
-    <button class="nav active" data-view="overview"><span class="ni">▚</span> Overview</button>
-    <button class="nav" data-view="chat"><span class="ni">💬</span> Chat</button>
-    <button class="nav" data-view="images"><span class="ni">🖼</span> Images</button>
-    <button class="nav" data-view="worker"><span class="ni">⚙</span> Run a worker</button>
-    <button class="nav" data-view="models"><span class="ni">▦</span> Models</button>
-    <button class="nav" data-view="earnings"><span class="ni">◆</span> Earnings</button>
-    <button class="nav" data-view="settings"><span class="ni">⚙</span> Settings</button>
+    <button class="nav active" data-view="overview"><span class="ni"></span> Overview</button>
+    <button class="nav" data-view="chat"><span class="ni"></span> Chat</button>
+    <button class="nav" data-view="images"><span class="ni"></span> Images</button>
+    <button class="nav" data-view="worker"><span class="ni"></span> Run a worker</button>
+    <button class="nav" data-view="models"><span class="ni"></span> Models</button>
+    <button class="nav" data-view="earnings"><span class="ni"></span> Earnings</button>
+    <button class="nav" data-view="settings"><span class="ni"></span> Settings</button>
     <div class="spacer"></div>
     <div class="conn" id="conn"><span class="dot" id="conndot"></span><span id="connlabel">not connected</span></div>
   </nav>
@@ -23,7 +23,7 @@
   <main>
     <!-- OVERVIEW -->
     <section class="view active" id="view-overview">
-      <header class="vh"><h1>Overview</h1><button class="btn" id="refresh">↻ Refresh</button></header>
+      <header class="vh"><h1>Overview</h1><button class="btn" id="refresh">Refresh</button></header>
       <div id="needkey" class="banner" style="display:none">
         No API key yet. Open <b>Settings</b> and paste your <code>grid_…</code> key to connect.
       </div>
@@ -61,7 +61,7 @@
           <div id="chatlog" class="chatlog"></div>
           <div class="chatinput">
             <textarea id="chattext" rows="1" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
-            <button class="btn" id="chatsend">Send</button>
+            <button class="btn primary" id="chatsend">Send</button>
             <button class="btn ghost" id="chatstop" style="display:none">Stop</button>
           </div>
         </div>
@@ -81,9 +81,9 @@
         <div id="imgsrcrow" class="row" style="display:none">
           <input type="file" id="imgfile" accept="image/*">
         </div>
-        <textarea id="imgprompt" rows="2" placeholder="Describe the image…" style="width:100%;font:inherit;background:var(--code);color:var(--fg);border:1px solid var(--bd);border-radius:10px;padding:10px 12px;resize:vertical"></textarea>
+        <textarea id="imgprompt" rows="2" placeholder="Describe the image…"></textarea>
         <div class="row" style="margin-top:8px">
-          <button class="btn" id="imggen">Generate</button>
+          <button class="btn primary" id="imggen">Generate</button>
           <span id="imgmsg" class="muted"></span>
         </div>
       </div>
@@ -105,8 +105,8 @@
         <div class="row">
           <input id="wname2" type="text" placeholder="Worker name (as enrolled in Console)" autocomplete="off" spellcheck="false">
           <input id="wmodel2" type="text" placeholder="qwen3:8b" autocomplete="off" spellcheck="false" list="wmodels-list">
-          <button class="btn" id="btn-auto">▶ Start worker (automatic)</button>
-          <button class="btn ghost" id="btn-stop2" disabled>■ Stop</button>
+          <button class="btn primary" id="btn-auto">Start worker (automatic)</button>
+          <button class="btn ghost" id="btn-stop2" disabled>Stop</button>
         </div>
         <p class="hint">One click: starts Ollama, downloads the worker if needed, pulls the model, then runs.
           Uses the API key from <b>Settings</b>. Stop your Docker worker first if it shares this name.</p>
@@ -169,8 +169,8 @@
         <p class="hint">Reuse the worker name + API key you enrolled via the Console.
           Uses the API key from <b>Settings</b>. Stop your Docker worker first if it uses the same name.</p>
         <div class="row">
-          <button class="btn" id="btn-start">▶ Start worker</button>
-          <button class="btn ghost" id="btn-stop" disabled>■ Stop</button>
+          <button class="btn" id="btn-start">Start worker</button>
+          <button class="btn ghost" id="btn-stop" disabled>Stop</button>
         </div>
       </div>
       </details>
@@ -185,7 +185,7 @@
 
     <!-- MODELS -->
     <section class="view" id="view-models">
-      <header class="vh"><h1>Models</h1><button class="btn" id="refresh-models">↻</button></header>
+      <header class="vh"><h1>Models</h1><button class="btn" id="refresh-models" aria-label="Refresh">Refresh</button></header>
       <p class="muted">Live from the grid. Prices are USD per million tokens.</p>
       <h2 class="sec">Text &amp; vision</h2>
       <div id="models" class="cards"><p class="muted">—</p></div>
@@ -195,7 +195,7 @@
 
     <!-- EARNINGS -->
     <section class="view" id="view-earnings">
-      <header class="vh"><h1>Earnings</h1><button class="btn" id="refresh-earnings">↻</button></header>
+      <header class="vh"><h1>Earnings</h1><button class="btn" id="refresh-earnings" aria-label="Refresh">Refresh</button></header>
       <div class="stats" id="estats"></div>
       <h2 class="sec">Recent jobs</h2>
       <div class="tablewrap"><table id="jobs"><thead><tr>
@@ -210,7 +210,7 @@
         <label>Grid API key</label>
         <div class="row">
           <input id="key" type="password" placeholder="grid_…" autocomplete="off" spellcheck="false">
-          <button class="btn" id="savekey">Save</button>
+          <button class="btn primary" id="savekey">Save</button>
           <button class="btn ghost" id="clearkey">Forget</button>
         </div>
         <p class="hint">Stored locally in this app only, sent only to api.aipowergrid.io.</p>
@@ -229,7 +229,7 @@
       </div>
       <div class="field">
         <label>Theme</label>
-        <div class="row"><button class="btn" id="theme">◐ Toggle light / dark</button></div>
+        <div class="row"><button class="btn" id="theme">Toggle light / dark</button></div>
       </div>
       <div class="field">
         <p class="hint">AIPG Desktop · unofficial, community-built · not affiliated with AI Power Grid.
@@ -243,14 +243,13 @@
       <div class="brand" style="padding:0 0 6px"><img src="aipg-logo.png" alt="" class="logo"> Welcome to AIPG Desktop</div>
       <p class="muted">Paste your Grid API key to get started. Chat works right away — running a worker is optional.</p>
       <div class="row" style="margin:12px 0">
-        <input id="wc-key" type="password" placeholder="grid_…" autocomplete="off" spellcheck="false"
-          style="flex:1;min-width:220px;font:inherit;background:var(--code);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:9px 11px">
+        <input id="wc-key" type="password" placeholder="grid_…" autocomplete="off" spellcheck="false">
       </div>
       <p class="hint">No key yet? Get one from the AIPG Console.
         <a href="#" data-ext="https://api.aipowergrid.io">Open Console →</a></p>
       <div class="row" style="margin-top:14px;justify-content:flex-end">
         <button class="btn ghost" id="wc-skip">Skip for now</button>
-        <button class="btn" id="wc-save">Save &amp; start</button>
+        <button class="btn primary" id="wc-save">Save &amp; start</button>
       </div>
     </div>
   </div>
