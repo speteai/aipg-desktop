@@ -644,14 +644,28 @@ pub struct WorkerCfg {
     worker_name: String,
 }
 
+/// An OS-assigned free TCP port on loopback (used for the worker's dashboard,
+/// so it never collides with another worker already holding 7861).
+fn free_port() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .ok()
+        .and_then(|l| l.local_addr().ok())
+        .map(|a| a.port())
+}
+
 #[tauri::command]
 pub async fn worker_start(
     app: AppHandle,
     state: State<'_, Arc<Procs>>,
     cfg: WorkerCfg,
 ) -> Result<(), String> {
-    if state.worker.lock().await.is_some() {
-        return Err("Worker läuft bereits.".into());
+    // Reap/kill any previous worker so a restart is always clean.
+    {
+        let mut g = state.worker.lock().await;
+        if let Some(mut c) = g.take() {
+            let _ = c.start_kill();
+            let _ = c.wait().await;
+        }
     }
     let bin = worker_bin(&app);
     if !bin.exists() {
@@ -675,8 +689,12 @@ pub async fn worker_start(
         .arg("--backend-url")
         .arg(OLLAMA)
         .arg("--worker-name")
-        .arg(&name)
-        .stdout(Stdio::piped())
+        .arg(&name);
+    // Give the worker's local dashboard a free port to avoid "port 7861 in use".
+    if let Some(port) = free_port() {
+        cmd.arg("--port").arg(port.to_string());
+    }
+    cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
@@ -687,8 +705,19 @@ pub async fn worker_start(
     let stderr = child.stderr.take();
     *state.worker.lock().await = Some(child);
 
+    // When stdout closes (process ended), clear the stored child so a restart
+    // isn't blocked and worker_running() reflects reality.
     if let Some(out) = stdout {
-        pump(app.clone(), out, false);
+        let procs = state.inner().clone();
+        let app2 = app.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(out).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = app2.emit("worker-log", line);
+            }
+            procs.worker.lock().await.take();
+            let _ = app2.emit("worker-exit", true);
+        });
     }
     if let Some(err) = stderr {
         pump(app.clone(), err, true);

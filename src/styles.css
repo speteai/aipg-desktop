@@ -20,8 +20,10 @@ code{font-family:ui-monospace,Menlo,monospace;background:var(--code);border:1px 
 /* sidebar */
 .side{width:180px;flex:0 0 180px;background:var(--panel);border-right:1px solid var(--bd);
   display:flex;flex-direction:column;padding:14px 10px;gap:4px}
-.brand{font-weight:700;font-size:1.1rem;padding:6px 10px 12px}
+.brand{font-weight:700;font-size:1.1rem;padding:6px 10px 12px;display:flex;align-items:center;gap:9px}
 .brand .bolt{color:var(--acc)}
+.brand .logo{width:24px;height:24px;border-radius:6px;flex:0 0 auto}
+.brand small{color:var(--mut);font-weight:600;font-size:.72rem}
 .nav{text-align:left;background:none;border:none;color:var(--mut);font:inherit;padding:9px 12px;
   border-radius:8px;cursor:pointer}
 .nav:hover{background:var(--panel2);color:var(--fg)}

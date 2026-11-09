@@ -516,20 +516,27 @@ function renderChatList() {
 async function fillChatModels() {
   const src = chatSource(), sel = $("#chatmodel");
   if (src === "grid") {
-    let ids = ["auto"]; const price = {};
+    let ids = ["auto"]; const price = {}, speed = {};
     try { const d = await api("/models", false); ids = (d.data || []).map((m) => m.id); } catch (e) {}
     try {
       const r = await fetch(API + "/status/models", { headers: { "Accept": "application/json" } });
       const list = await r.json();
-      (Array.isArray(list) ? list : []).forEach((m) => { if (m.pricing) price[m.name] = m.pricing; });
+      (Array.isArray(list) ? list : []).forEach((m) => {
+        if (m.pricing) price[m.name] = m.pricing;
+        if (m.type === "text" && m.tokens_per_s) speed[m.name] = m.tokens_per_s;
+      });
     } catch (e) {}
+    // most suitable concrete model = fastest text model with known throughput
+    const best = Object.keys(speed).sort((a, b) => speed[b] - speed[a])[0];
     ids.sort((a, b) => (a === "auto" ? -1 : b === "auto" ? 1 : 0));
     sel.innerHTML = ids.map((id) => {
       const p = price[id];
       const tag = p ? ` · $${p.input_per_mtok_usd}/$${p.output_per_mtok_usd} /Mtok` : "";
-      return `<option value="${esc(id)}">${id === "auto" ? "Auto (grid picks)" : esc(id)}${esc(tag)}</option>`;
+      const star = id === best ? " ★" : "";
+      const label = id === "auto" ? "Auto (grid picks · recommended)" : esc(id) + star;
+      return `<option value="${esc(id)}">${label}${esc(tag)}</option>`;
     }).join("");
-    $("#chathint").innerHTML = "Grid · <b>Auto</b> lets the grid pick the best model. Prices are input/output per million tokens.";
+    $("#chathint").innerHTML = "Grid · <b>Auto</b> picks the best model automatically. ★ = fastest right now. Prices are per million tokens.";
   } else {
     let list = [];
     try { list = await invoke("ollama_models"); } catch (e) {}
@@ -744,6 +751,25 @@ function loadImages() { if (!IMG_WIRED) wireImages(); fillImgModels(); }
 /* ---------- misc ---------- */
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
+/* notify when new grid models appear (compared to what we've seen before) */
+async function checkNewModels() {
+  let ids = [];
+  try {
+    const d = await api("/models", false);
+    ids = (d.data || []).map((m) => m.id).filter((x) => x && x !== "auto").sort();
+  } catch (e) { return; }
+  if (!ids.length) return;
+  let known = [];
+  try { known = JSON.parse(get("aipg_known_models") || "[]"); } catch (e) {}
+  const fresh = ids.filter((x) => !known.includes(x));
+  if (known.length && fresh.length) {
+    const msg = fresh.join(", ");
+    toast("New grid model: " + msg);
+    nativeNotify("New AIPG model available", msg + " — now on the grid.");
+  }
+  set("aipg_known_models", JSON.stringify(ids));
+}
+
 /* ---------- views ---------- */
 function show(view) {
   $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
@@ -803,4 +829,5 @@ document.addEventListener("DOMContentLoaded", () => {
 
   show("overview");
   startPolling();
+  checkNewModels();
 });
