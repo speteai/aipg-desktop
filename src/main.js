@@ -336,6 +336,22 @@ function wireWorker() {
     } catch (e) { toast(emsg(e)); logLine("[start] " + emsg(e)); syncRunButtons(); }
   };
 
+  $("#btn-copylog").onclick = async () => {
+    const txt = $("#wlog").textContent || "";
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(txt);
+        toast("Log kopiert");
+      } else throw new Error("no-clipboard");
+    } catch (e) {
+      // fallback: select the log so the user can Ctrl/Cmd+C
+      const r = document.createRange(); r.selectNodeContents($("#wlog"));
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      toast("Markiert — mit Strg/Cmd+C kopieren");
+    }
+  };
+  $("#btn-clearlog").onclick = () => { $("#wlog").textContent = "—"; };
+
   $("#btn-stop").onclick = async () => {
     $("#btn-stop").disabled = true;
     try { await invoke("worker_stop"); } catch (e) {}

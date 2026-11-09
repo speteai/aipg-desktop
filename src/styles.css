@@ -82,7 +82,8 @@ tbody tr:last-child td{border-bottom:none}
 .pbar>span{display:block;height:100%;width:0;background:var(--acc2);transition:width .2s}
 .log{background:var(--code);border:1px solid var(--bd);border-radius:11px;padding:12px 14px;
   font-family:ui-monospace,Menlo,monospace;font-size:.8rem;line-height:1.5;color:var(--mut);
-  max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
+  max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;
+  user-select:text;-webkit-user-select:text;cursor:text}
 .chip.run{color:var(--acc);border-color:var(--acc)}
 .chip.warn{color:var(--warn);border-color:var(--warn)}
 
