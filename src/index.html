@@ -27,7 +27,8 @@
     <section class="view active" id="view-overview">
       <header class="vh"><h1>Overview</h1><button class="btn" id="refresh">Refresh</button></header>
       <div id="needkey" class="banner" style="display:none">
-        No API key yet. Open <b>Settings</b> and paste your <code>grid_…</code> key to connect.
+        No API key yet. With a key you can chat on the grid, generate images, see your credit and run a worker.
+        <button class="btn primary" id="needkey-go" style="margin-left:8px">Get a key</button>
       </div>
       <div class="stats" id="stats"></div>
       <div class="vh" style="margin-top:22px">
@@ -367,7 +368,8 @@
           <button class="btn primary" id="savekey">Save</button>
           <button class="btn ghost" id="clearkey">Forget</button>
         </div>
-        <p class="hint">Stored locally in this app only, sent only to api.aipowergrid.io.</p>
+        <p class="hint">Stored locally in this app only, sent only to api.aipowergrid.io.
+          <a href="#" id="key-help">No key yet? Show me how to get one →</a></p>
       </div>
       <div class="field">
         <label><input type="checkbox" id="alerts"> Offline alerts (native notifications while the app is open)</label>
@@ -437,16 +439,23 @@
   <div id="welcome" class="overlay" style="display:none">
     <div class="card welcomecard">
       <div class="brand" style="padding:0 0 6px"><img src="aipg-logo.png" alt="" class="logo"> Welcome to AIPG Desktop</div>
-      <p class="muted">Paste your Grid API key to get started. Chat works right away — running a worker is optional.</p>
-      <div class="row" style="margin:12px 0">
-        <input id="wc-key" type="password" placeholder="grid_…" autocomplete="off" spellcheck="false">
-      </div>
-      <p class="hint">No key yet? Get one from the AIPG Console.
-        <a href="#" data-ext="https://api.aipowergrid.io">Open Console →</a></p>
+      <p class="muted">The app needs a Grid API key for chat, images, your credit and running a worker.
+        It is free to create and takes a minute.</p>
+      <ol class="wcsteps">
+        <li><b>Open the AIPG Console</b> and sign in, or create an account there.
+          <div class="row"><button class="btn" id="wc-open" data-ext="https://console.aipowergrid.io/dashboard/api-key">Open the key page →</button></div></li>
+        <li><b>Create an API key</b> on that page and copy it. It starts with <code>grid_</code>; copy it
+          right away, the Console may not show it again.</li>
+        <li><b>Paste it here.</b>
+          <div class="row"><input id="wc-key" type="password" placeholder="grid_…" autocomplete="off" spellcheck="false"></div></li>
+      </ol>
+      <p class="hint" id="wc-msg">The key is stored on this computer only and sent only to api.aipowergrid.io.</p>
       <div class="row" style="margin-top:14px;justify-content:flex-end">
-        <button class="btn ghost" id="wc-skip">Skip for now</button>
-        <button class="btn primary" id="wc-save">Save &amp; start</button>
+        <button class="btn ghost" id="wc-skip">Not now</button>
+        <button class="btn primary" id="wc-save">Check &amp; save</button>
       </div>
+      <p class="hint">Without a key you can still look at the network and the model list, and chat with a
+        model on your own computer.</p>
     </div>
   </div>
 
