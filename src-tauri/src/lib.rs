@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 mod connector;
 mod mcp;
@@ -26,6 +27,49 @@ fn tray_status(app: tauri::AppHandle, text: String) {
     }
 }
 
+/* ---- quick prompt: a one-line window on a global shortcut ---- */
+
+fn toggle_quick(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("quick") {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            let _ = w.center();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+    }
+}
+
+#[tauri::command]
+fn quick_hide(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("quick") {
+        let _ = w.hide();
+    }
+}
+
+/// The quick prompt was submitted: bring up the main window and let its
+/// chat send the text.
+#[tauri::command]
+fn quick_submit(app: tauri::AppHandle, text: String) {
+    quick_hide(app.clone());
+    show_main(&app);
+    let _ = app.emit_to("main", "quick-ask", text);
+}
+
+/// (Re)register the global shortcut for the quick prompt; empty = off.
+#[tauri::command]
+fn quick_shortcut_set(app: tauri::AppHandle, shortcut: String) -> Result<(), String> {
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let s = shortcut.trim();
+    if s.is_empty() {
+        return Ok(());
+    }
+    gs.register(s)
+        .map_err(|x| format!("{s} could not be registered — another program may be using it ({x})"))
+}
+
 /// `--mcp <connector.json>`: run as a local MCP server on stdio instead of
 /// opening the app (launched by Claude Desktop, Claude Code, …).
 pub fn run_connector(key_file: String) {
@@ -41,6 +85,15 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        toggle_quick(app);
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
@@ -76,6 +129,10 @@ pub fn run() {
             worker::chats_read,
             worker::chats_write,
             tray_status,
+            quick_hide,
+            quick_submit,
+            quick_shortcut_set,
+            worker::pdf_text,
             connector::connector_status,
             connector::connector_enable,
             connector::connector_disable,
@@ -110,6 +167,21 @@ pub fn run() {
                     }
                 })
                 .build(&handle)?;
+            // Quick prompt window, created hidden; the shortcut only shows it.
+            let _ = tauri::WebviewWindowBuilder::new(
+                &handle,
+                "quick",
+                tauri::WebviewUrl::App("quick.html".into()),
+            )
+            .title("AIPG Quick prompt")
+            .inner_size(680.0, 64.0)
+            .resizable(false)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .center()
+            .build();
             // Launched at login (autostart passes --minimized): stay in the tray.
             let just_updated = worker::take_update_marker(&handle);
             if !just_updated && std::env::args().any(|a| a == "--minimized") {
@@ -123,9 +195,15 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Default: hide to tray instead of quitting, so a running worker
                 // keeps earning. Disable via Settings → "close to tray".
-                if worker::config_bool(window.app_handle(), "close_to_tray", true) {
+                if window.label() == "quick" {
                     api.prevent_close();
                     let _ = window.hide();
+                } else if worker::config_bool(window.app_handle(), "close_to_tray", true) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else {
+                    // the hidden quick prompt window must not keep the app alive
+                    window.app_handle().exit(0);
                 }
             }
         })

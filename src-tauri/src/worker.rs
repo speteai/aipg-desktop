@@ -1330,6 +1330,25 @@ pub fn images_dir_open(app: AppHandle) -> Result<(), String> {
         .map_err(e)
 }
 
+/* ------------------------- chat attachments ------------------------- */
+
+/// Plain text of a PDF (base64 in) so it can be attached to a chat message.
+#[tauri::command]
+pub async fn pdf_text(data: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(e)?;
+    tokio::task::spawn_blocking(move || {
+        // the extractor can panic on unusual files — report that as an error
+        std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes))
+            .map_err(|_| "This PDF could not be read.".to_string())?
+            .map_err(|x| format!("This PDF could not be read: {x}"))
+    })
+    .await
+    .map_err(e)?
+}
+
 /* ------------------------- chat store (local JSON file) ------------------------- */
 
 fn chats_path(app: &AppHandle) -> PathBuf {

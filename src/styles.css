@@ -450,6 +450,21 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .chatinput textarea:focus{outline:none}
 .chatinput textarea::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chatinput .btn{flex:0 0 auto}
+.chatinput .attach{font-size:18px;line-height:1;padding:5px 10px}
+.chatatt{display:flex;flex-wrap:wrap;gap:var(--s2);flex:0 0 auto}
+.chatatt:empty{display:none}
+.chatatt:not(:empty){margin-bottom:var(--s2)}
+.attchip{display:inline-flex;align-items:center;gap:6px;max-width:280px;
+  font:var(--t-micro)/1.4 var(--mono);color:var(--fg);
+  background:var(--code);border:1px solid var(--bd);padding:3px 8px}
+.attchip img{width:22px;height:22px;object-fit:cover}
+.attchip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attchip .sz{color:var(--faint);flex:0 0 auto}
+.attchip .x{cursor:pointer;color:var(--mut);flex:0 0 auto}
+.attchip .x:hover{color:var(--fg)}
+.msg .matt{display:flex;flex-wrap:wrap;gap:var(--s2);margin:2px 0 var(--s1);white-space:normal}
+.msg .matt img.thumb{max-width:160px;max-height:120px;border:1px solid var(--bd)}
+.chatmain.dropping .chatinput{border-color:var(--acc);border-style:dashed}
 
 
 /* 11 · Images ============================================================= */

@@ -64,7 +64,10 @@
           </div>
           <p class="hint" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
           <div id="chatlog" class="chatlog"></div>
+          <div id="chatatt" class="chatatt"></div>
           <div class="chatinput">
+            <button class="btn ghost attach" id="chatattach" title="Attach files (or drop / paste them here)">+</button>
+            <input type="file" id="chatfile" multiple style="display:none">
             <textarea id="chattext" rows="1" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
             <button class="btn primary" id="chatsend">Send</button>
             <button class="btn ghost" id="chatstop" style="display:none">Stop</button>
@@ -343,6 +346,18 @@
         <label><input type="checkbox" id="closetray"> Minimize to tray when the window is closed</label>
         <p class="hint">Closing the window then keeps the app (and a running worker) alive in the background.
           Quit completely via right-click on the tray icon → “Quit”.</p>
+      </div>
+      <div class="field" id="field-quick">
+        <label>Quick prompt shortcut</label>
+        <div class="row">
+          <select id="quickkey" class="sel">
+            <option value="Alt+Space">Alt + Space</option>
+            <option value="Ctrl+Shift+Space">Ctrl + Shift + Space</option>
+            <option value="Ctrl+Alt+G">Ctrl + Alt + G</option>
+            <option value="">Off</option>
+          </select>
+        </div>
+        <p class="hint" id="quickmsg">Opens a one-line prompt above all windows while the app is running. Enter sends it to a new chat.</p>
       </div>
       <div class="field" id="field-update">
         <label>Updates <span id="appver" class="muted"></span></label>

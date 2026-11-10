@@ -41,6 +41,10 @@ running a worker is optional.
   specific one) or to a **local model** on your own Ollama. Streaming replies, multiple
   conversations, local history with a context cap. Nothing leaves your machine except the
   prompt you send to the grid.
+  - **Attachments** — drop, paste or pick text, code and PDF files; their text is sent
+    along as context. Images can be attached for a local vision model (the grid has none).
+  - **Quick prompt** — a global shortcut (default `Alt+Space`, changeable or off in
+    Settings) opens a one-line prompt above all windows and sends it to a new chat.
 - **Images** — text-to-image and image-to-image on the grid's image models, with format
   and count options, live generation progress, and a **local gallery** (save, reuse a
   prompt, use a result as the next source image). You choose the **folder the images

@@ -884,11 +884,22 @@ async function fillChatModels() {
   }
 }
 
-function addMsg(role, text, model) {
+function addMsg(role, text, model, att) {
   const el = document.createElement("div");
   el.className = "msg " + (role === "user" ? "user" : "bot");
   if (role !== "user" && model) {
     const n = document.createElement("span"); n.className = "mname"; n.textContent = model; el.appendChild(n);
+  }
+  if (att && ((att.files && att.files.length) || (att.images && att.images.length))) {
+    const a = document.createElement("span"); a.className = "matt";
+    (att.images || []).forEach((u) => { const i = document.createElement("img"); i.className = "thumb"; i.src = u; a.appendChild(i); });
+    (att.files || []).forEach((f) => {
+      const ch = document.createElement("span"); ch.className = "attchip";
+      const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = f.name;
+      const sz = document.createElement("span"); sz.className = "sz"; sz.textContent = fmtChars(f.chars);
+      ch.appendChild(nm); ch.appendChild(sz); a.appendChild(ch);
+    });
+    el.appendChild(a);
   }
   const body = document.createElement("span"); body.textContent = text; el.appendChild(body);
   $("#chatlog").appendChild(el); $("#chatlog").scrollTop = 1e9;
@@ -897,7 +908,7 @@ function addMsg(role, text, model) {
 
 function renderMessages() {
   const c = curChat(); $("#chatlog").innerHTML = ""; if (!c) return;
-  for (const m of c.msgs) addMsg(m.role === "user" ? "user" : "bot", m.content, m.role !== "user" ? m.model : null);
+  for (const m of c.msgs) addMsg(m.role === "user" ? "user" : "bot", m.show != null ? m.show : m.content, m.role !== "user" ? m.model : null, m);
 }
 
 function loadCurrentChat() {
@@ -912,7 +923,13 @@ function loadCurrentChat() {
 /* message list actually sent, honoring the context cap + summary */
 function buildSend(c) {
   const cap = STORE.cap | 0;
-  const plain = c.msgs.map((m) => ({ role: m.role, content: m.content }));
+  // images go out as OpenAI-style content parts (local vision models only)
+  const plain = c.msgs.map((m) => ({
+    role: m.role,
+    content: m.images && m.images.length && c.src === "local"
+      ? [{ type: "text", text: m.content }, ...m.images.map((u) => ({ type: "image_url", image_url: { url: u } }))]
+      : m.content,
+  }));
   if (cap > 0 && plain.length > cap) {
     const recent = plain.slice(-cap);
     if (STORE.summarize && c.summary) return [{ role: "system", content: "Summary of earlier conversation: " + c.summary }, ...recent];
@@ -943,18 +960,104 @@ async function ensureSummary(c, src, model) {
   try { const s = await simpleComplete(src, model, prompt); if (s) { c.summary = s.trim(); c.summaryCount = olderEnd; } } catch (e) {}
 }
 
+/* ---------- chat attachments: text/code/PDF as context, images for local vision ---------- */
+let CHAT_ATT = [];              // {kind:"text", name, text} | {kind:"image", name, url}
+const ATT_FILE_CHARS = 200000;  // per file
+const ATT_TOTAL_CHARS = 400000; // per message
+function fmtChars(n) { n = n || 0; return n >= 1000 ? Math.round(n / 1000) + "k chars" : n + " chars"; }
+
+function renderAtt() {
+  const box = $("#chatatt"); box.innerHTML = "";
+  CHAT_ATT.forEach((a, i) => {
+    const ch = document.createElement("span"); ch.className = "attchip";
+    if (a.kind === "image") { const im = document.createElement("img"); im.src = a.url; ch.appendChild(im); }
+    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = a.name; nm.title = a.name; ch.appendChild(nm);
+    if (a.kind === "text") { const sz = document.createElement("span"); sz.className = "sz"; sz.textContent = fmtChars(a.text.length); ch.appendChild(sz); }
+    const x = document.createElement("span"); x.className = "x"; x.textContent = "×"; x.title = "Remove";
+    x.onclick = () => { CHAT_ATT.splice(i, 1); renderAtt(); };
+    ch.appendChild(x); box.appendChild(ch);
+  });
+}
+
+function fileToB64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(",")[1] || "");
+    r.onerror = () => rej(new Error("could not read the file"));
+    r.readAsDataURL(file);
+  });
+}
+// Shrink an image so it stays small in the saved chat (max 1280 px, JPEG).
+function imageToSmallDataURL(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(im.width, im.height));
+      const cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(im.width * k)); cv.height = Math.max(1, Math.round(im.height * k));
+      const g = cv.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(im, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url); res(cv.toDataURL("image/jpeg", 0.85));
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error("not a readable image")); };
+    im.src = url;
+  });
+}
+
+async function attachFiles(files) {
+  for (const f of [...files]) {
+    const name = f.name || "pasted";
+    try {
+      if (/^image\//.test(f.type)) {
+        if (chatSource() !== "local") { toast("Images need a local vision model — the grid has none online. Switch to Local."); continue; }
+        CHAT_ATT.push({ kind: "image", name, url: await imageToSmallDataURL(f) });
+      } else {
+        let text;
+        if (f.type === "application/pdf" || /\.pdf$/i.test(name)) {
+          if (f.size > 30 * 1048576) { toast(name + ": PDF is larger than 30 MB"); continue; }
+          text = await invoke("pdf_text", { data: await fileToB64(f) });
+          if (!text.trim()) { toast(name + ": no text found (scanned PDF?)"); continue; }
+        } else {
+          if (f.size > 5 * 1048576) { toast(name + ": larger than 5 MB"); continue; }
+          text = await f.text();
+          if (text.slice(0, 8000).includes("\u0000")) { toast(name + ": not a text file"); continue; }
+        }
+        let cut = false;
+        if (text.length > ATT_FILE_CHARS) { text = text.slice(0, ATT_FILE_CHARS); cut = true; }
+        const used = CHAT_ATT.reduce((n, a) => n + (a.kind === "text" ? a.text.length : 0), 0);
+        if (used + text.length > ATT_TOTAL_CHARS) { toast(name + ": too much attached text for one message"); continue; }
+        CHAT_ATT.push({ kind: "text", name, text });
+        if (cut) toast(name + ": only the first " + fmtChars(ATT_FILE_CHARS) + " are attached");
+      }
+    } catch (e) { toast(name + ": " + emsg(e)); }
+  }
+  renderAtt();
+}
+
 async function chatSend() {
-  const ta = $("#chattext"), text = ta.value.trim(); if (!text) return;
+  const ta = $("#chattext"), typed = ta.value.trim();
+  if (!typed && !CHAT_ATT.length) return;
   const c = curChat(); if (!c) return;
+  const att = CHAT_ATT;
+  const docs = att.filter((a) => a.kind === "text"), pics = att.filter((a) => a.kind === "image");
+  if (pics.length && chatSource() !== "local") { toast("Images need a local vision model — switch to Local or remove them"); return; }
+  const text = [typed, ...docs.map((d) => `[Attached file: ${d.name}]\n\`\`\`\n${d.text}\n\`\`\``)].filter(Boolean).join("\n\n")
+    || "Describe the attached image.";
   const src = chatSource(), model = $("#chatmodel").value;
   if (src === "grid" && !apiKey()) { toast("Save your API key in Settings first"); return show("settings"); }
   if (src === "local" && !model) { toast("No local model — pull one under “Run a worker”"); return; }
   c.src = src; c.model = model;
 
   ta.value = ""; ta.style.height = "auto";
-  addMsg("user", text);
-  c.msgs.push({ role: "user", content: text });
-  if (!c.title || c.title === "New chat") { c.title = text.slice(0, 40); renderChatList(); }
+  CHAT_ATT = []; renderAtt();
+  const um = { role: "user", content: text };
+  if (att.length) {
+    um.show = typed;
+    if (docs.length) um.files = docs.map((d) => ({ name: d.name, chars: d.text.length }));
+    if (pics.length) um.images = pics.map((p) => p.url);
+  }
+  addMsg("user", att.length ? typed : text, null, um);
+  c.msgs.push(um);
+  if (!c.title || c.title === "New chat") { c.title = (typed || att[0].name).slice(0, 40); renderChatList(); }
   const label = src === "grid" ? model : "local · " + model;
   const body = addMsg("bot", "▍", label);
   storePersist();
@@ -1016,7 +1119,21 @@ function wireChat() {
   $("#chatsend").onclick = chatSend;
   $("#chatstop").onclick = () => { if (CHAT_ABORT) CHAT_ABORT.abort(); };
   $("#chatnew").onclick = () => addChat(true);
+  $("#chatattach").onclick = () => $("#chatfile").click();
+  $("#chatfile").onchange = () => { attachFiles($("#chatfile").files); $("#chatfile").value = ""; };
+  const zone = document.querySelector("#view-chat .chatmain");
+  const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
+  zone.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); zone.classList.add("dropping"); } });
+  zone.addEventListener("dragleave", (e) => { if (!zone.contains(e.relatedTarget)) zone.classList.remove("dropping"); });
+  zone.addEventListener("drop", (e) => {
+    zone.classList.remove("dropping");
+    if (hasFiles(e)) { e.preventDefault(); attachFiles(e.dataTransfer.files); }
+  });
   const ta = $("#chattext");
+  ta.addEventListener("paste", (e) => {
+    const fs = e.clipboardData && e.clipboardData.files;
+    if (fs && fs.length) { e.preventDefault(); attachFiles(fs); }
+  });
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend(); } });
 }
@@ -1515,8 +1632,48 @@ document.addEventListener("DOMContentLoaded", () => {
   startPolling();
   checkNewModels();
   bootAutostart();
+  wireQuick();
   checkUpdate(false);
 });
+
+/* ---------- quick prompt (global shortcut → one-line window → new chat) ---------- */
+async function quickAsk(text) {
+  text = String(text || "").trim(); if (!text) return;
+  show("chat");
+  if (!STORE) await storeLoad();
+  if (!CHAT_WIRED) wireChat();
+  if (CHAT_ABORT) { toast("A reply is still running — stop it first"); $("#chattext").value = text; return; }
+  const cur = curChat();
+  if (!cur || cur.msgs.length) addChat(true);
+  const g = document.querySelector('input[name=chatsrc][value="grid"]'); if (g) g.checked = true;
+  await fillChatModels();
+  if ([...$("#chatmodel").options].some((o) => o.value === "auto")) $("#chatmodel").value = "auto";
+  $("#chattext").value = text;
+  chatSend();
+}
+async function applyQuickKey(report) {
+  const stored = get("aipg_quickkey");
+  const key = stored == null ? "Alt+Space" : stored;
+  const sel = $("#quickkey"); if (sel) sel.value = key;
+  const base = "Opens a one-line prompt above all windows while the app is running. Enter sends it to a new chat.";
+  try {
+    await invoke("quick_shortcut_set", { shortcut: key });
+    if ($("#quickmsg")) $("#quickmsg").textContent = base;
+  } catch (e) {
+    if ($("#quickmsg")) $("#quickmsg").textContent = "⚠ " + emsg(e) + " Choose another shortcut.";
+    if (report) toast(emsg(e));
+  }
+}
+function wireQuick() {
+  if (!TAURI.core) return;
+  listen("quick-ask", (e) => quickAsk(e.payload));
+  const sel = $("#quickkey");
+  if (sel) sel.onchange = () => { set("aipg_quickkey", sel.value); applyQuickKey(true); };
+  applyQuickKey(false);
+  // files dropped outside the chat must not replace the app with the file
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
+}
 
 /* ---------- self-update (signed releases from GitHub) ---------- */
 function wireUpdates() {
