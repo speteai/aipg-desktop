@@ -1764,6 +1764,7 @@ document.addEventListener("DOMContentLoaded", () => {
   checkNewModels();
   bootAutostart();
   wireQuick();
+  $("#donate-copy").onclick = () => copyText($("#donate-addr").textContent.trim(), "Address copied");
   checkUpdate(false);
 });
 

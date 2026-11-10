@@ -108,3 +108,12 @@ Actions on every `v*` tag.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Support
+
+AIPG Desktop is free, unofficial and built in spare time. If it is useful to you, a
+voluntary tip on the **Base** network (ETH or USDC) is welcome:
+
+`0x1C0356d4ff32aEe3DF28Acf941335A1823dB50A4`
+
+Send on Base only. Nothing in the app depends on it.
