@@ -93,6 +93,23 @@ On first start the app walks you through it: open the
 The app checks the key with the grid before saving it. Without a key you can still browse
 the network and the model list and chat with a model on your own computer.
 
+## Protection against other grid participants
+
+Grid requests are answered on computers run by independent people. The app limits what
+such a computer can learn or do:
+
+- **Private data is masked.** Before a chat message or a connector request goes to the
+  grid, keys, passwords, e-mail addresses, IBANs, card and phone numbers are found and
+  (after asking, or always, as you choose) replaced by placeholders; the real values are
+  put back into the answer on your computer. This catches clearly shaped values only.
+- **“Local only” chats** can use local models only and never reach the grid.
+- **Answers are untrusted.** The connector hands every grid answer to the assistant
+  marked as third-party content whose instructions must not be followed. The app shows
+  answers as plain text and never runs anything from them.
+
+The grid offers no encryption and no choice of worker, so a worker always sees the
+(masked) prompt and can return a wrong answer.
+
 ## Security & privacy
 
 - Your API key is stored **locally** and sent only to `api.aipowergrid.io`.
