@@ -455,12 +455,30 @@ function applyModel(m) {
 let PULL_FRAC = 0;
 const LOW_SPACE = 5 * 1073741824;
 
-// Confirm dialog via the dialog plugin. `fallback` is the answer when the
-// dialog is unavailable (true = proceed, false = don't).
-async function askConfirm(message, title, fallback = true) {
-  try {
-    return await invoke("plugin:dialog|confirm", { message, title: title || "AIPG Desktop" });
-  } catch (e) { return fallback; }
+// In-app confirm dialog (OK / Cancel). It does not depend on the dialog
+// plugin, whose `confirm` command no longer exists — every question used to
+// be answered silently with its fallback. Resolves true on OK.
+function askConfirm(message, title) {
+  return new Promise((resolve) => {
+    const ov = document.createElement("div"); ov.className = "overlay confirm";
+    const card = document.createElement("div"); card.className = "card welcomecard";
+    const h = document.createElement("div"); h.className = "brand"; h.style.padding = "0 0 6px"; h.textContent = title || "AIPG Desktop";
+    const p = document.createElement("p"); p.className = "muted"; p.style.whiteSpace = "pre-wrap"; p.textContent = message;
+    const row = document.createElement("div"); row.className = "row"; row.style.cssText = "margin-top:14px;justify-content:flex-end;display:flex;gap:8px";
+    const no = document.createElement("button"); no.className = "btn ghost"; no.textContent = "Cancel";
+    const yes = document.createElement("button"); yes.className = "btn primary"; yes.textContent = "OK";
+    row.appendChild(no); row.appendChild(yes);
+    card.appendChild(h); card.appendChild(p); card.appendChild(row); ov.appendChild(card);
+    const done = (v) => { document.removeEventListener("keydown", onKey, true); ov.remove(); resolve(v); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); done(true); }
+    };
+    no.onclick = () => done(false); yes.onclick = () => done(true);
+    ov.addEventListener("mousedown", (e) => { if (e.target === ov) done(false); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(ov); yes.focus();
+  });
 }
 
 // Models are multi-GB: warn before a download that is likely to run out of disk.

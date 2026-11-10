@@ -1,6 +1,6 @@
 {
   "name": "aipg-desktop",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "private": true,
   "description": "Desktop dashboard for the AI Power Grid",
   "scripts": {
