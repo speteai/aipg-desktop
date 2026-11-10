@@ -159,7 +159,7 @@ function renderWorkers(workers) {
     const models = (w.models || []).join(", ") || "—";
     return `<div class="card${isHidden ? " dim" : ""}"><h3>${esc(w.name)}</h3>
       <div class="chips">${badge}<span class="chip">${esc(w.type || "")}</span>${isHidden ? '<span class="chip">hidden</span>' : ""}</div>
-      <div class="wmeta">models: ${esc(models)}<br>den: ${w.den_earned ?? 0} · jobs: ${w.jobs_completed ?? 0}</div>
+      <div class="wmeta">models: ${esc(models)}<br>den: ${esc(w.den_earned ?? 0)} · jobs: ${esc(w.jobs_completed ?? 0)}</div>
       <div class="row"><button class="btn ghost" data-wi="${i}">${isHidden ? "Unhide" : "Hide"}</button></div></div>`;
   }).join("");
   $$("#workers [data-wi]").forEach((b) => (b.onclick = () => {
@@ -180,7 +180,7 @@ async function loadModels() {
       if (mods.includes("text")) chips += '<span class="chip txt">text</span>';
       if (mods.includes("image")) chips += '<span class="chip img">vision</span>';
       const p = m.pricing;
-      const price = p ? `<span class="price"><span class="v">$${p.input_per_mtok_usd}</span> in · <span class="v">$${p.output_per_mtok_usd}</span> out /Mtok</span>`
+      const price = p ? `<span class="price"><span class="v">$${esc(p.input_per_mtok_usd)}</span> in · <span class="v">$${esc(p.output_per_mtok_usd)}</span> out /Mtok</span>`
         : '<span class="muted">no price</span>';
       return `<div class="card"><h3>${esc(m.id)}</h3><div class="chips">${chips || '<span class="chip">—</span>'}</div>${price}</div>`;
     }).join("");
@@ -245,10 +245,10 @@ async function loadEarnings() {
     renderEarnHistory(recordEarn(d.total_den));
     const tb = $("#jobs tbody");
     tb.innerHTML = jobs.slice(0, 50).map((j) => `<tr>
-      <td>${j.ts ? new Date(j.ts).toLocaleString() : (j.timestamp || "—")}</td>
+      <td>${esc(j.ts ? new Date(j.ts).toLocaleString() : (j.timestamp || "—"))}</td>
       <td>${esc(j.model || "")}</td><td>${esc(j.type || "")}</td>
-      <td>${j.den ?? "—"}</td><td>${j.output_units ?? "—"}</td>
-      <td>${j.duration_s != null ? j.duration_s + "s" : "—"}</td></tr>`).join("")
+      <td>${esc(j.den ?? "—")}</td><td>${esc(j.output_units ?? "—")}</td>
+      <td>${esc(j.duration_s != null ? j.duration_s + "s" : "—")}</td></tr>`).join("")
       || '<tr><td colspan="6" class="muted">No jobs yet.</td></tr>';
   } catch (e) {
     $("#estats").innerHTML = "";
@@ -707,6 +707,7 @@ async function loadWorker() {
   syncRunButtons();
   refreshOllamaModels();
   loadModelsDir();
+  loadOllamaSettings();
 }
 
 function syncRunButtons() {
@@ -806,9 +807,44 @@ async function autoStartWorker() {
   }
 }
 
+/* Ollama settings: context length and whether the user's own Ollama is used */
+function showOllamaSettings(s) {
+  OLLAMA_LOCAL = s.base + "/v1";
+  const sel = $("#ollama-ctx");
+  if (sel) {
+    if (![...sel.options].some((o) => o.value === String(s.ctx))) sel.add(new Option(String(s.ctx), String(s.ctx)));
+    sel.value = String(s.ctx);
+    sel.disabled = s.use_system;
+  }
+  if ($("#ollama-own")) $("#ollama-own").checked = s.use_system;
+  if ($("#ollama-note")) $("#ollama-note").textContent = s.use_system
+    ? "Using your own Ollama on port 11434: its models, its context length and its graphics memory. Models you download or delete here are downloaded or deleted there."
+    : `The app runs its own Ollama on port ${s.managed_port}, separate from any Ollama you installed. Models load with this context length, and the worker tells the grid the same number, so long prompts are refused instead of cut off. Larger values need more graphics memory.`;
+}
+async function loadOllamaSettings() {
+  if (!TAURI.core) return;
+  try { showOllamaSettings(await invoke("ollama_settings")); } catch (e) {}
+}
+async function saveOllamaSettings() {
+  if (WORKER_RUNNING) { toast("Stop the worker before changing these settings"); return loadOllamaSettings(); }
+  const useSystem = $("#ollama-own").checked;
+  if (useSystem && !(await askConfirm(
+    "Use your own Ollama on port 11434?\n\nThe app then shares its models and graphics memory: downloads land in your Ollama's store, “Delete” removes models there, and a second worker using the same Ollama competes for the GPU.",
+    "Use your own Ollama"))) { return loadOllamaSettings(); }
+  try {
+    showOllamaSettings(await invoke("ollama_settings_set", { ctx: parseInt($("#ollama-ctx").value, 10) || 8192, useSystem }));
+    toast("Ollama settings saved");
+    try { await invoke("ollama_ensure"); } catch (e) {}
+  } catch (e) { toast(emsg(e)); loadOllamaSettings(); }
+  refreshOllamaModels();
+  try { renderPrereqs(await invoke("prereqs")); } catch (e) {}
+}
+
 function wireWorker() {
   WORKER_WIRED = true;
   wireModelPicker();
+  $("#ollama-ctx").onchange = saveOllamaSettings;
+  $("#ollama-own").onchange = saveOllamaSettings;
 
   listen("worker-dl", (e) => {
     const { received, total } = e.payload || {};
@@ -914,7 +950,7 @@ function wireWorker() {
 
 /* ---------- chat (multi-chat, local persistence, context cap) ---------- */
 let CHAT_WIRED = false, CHAT_ABORT = null, CHAT_PERSIST_T = null, STORE = null;
-const OLLAMA_LOCAL = "http://127.0.0.1:11434/v1";
+let OLLAMA_LOCAL = "http://127.0.0.1:11511/v1"; // the app's own Ollama; updated by loadOllamaSettings()
 
 function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 function chatSource() { const r = document.querySelector('input[name=chatsrc]:checked'); return r ? r.value : "grid"; }
@@ -1440,14 +1476,7 @@ async function galleryData(id) {
   try { IMG_CACHE[id] = await invoke("image_data", { id }); return IMG_CACHE[id]; } catch (e) { return ""; }
 }
 async function exportImage(it) {
-  let dest;
-  try {
-    dest = await invoke("plugin:dialog|save", {
-      options: { title: "Save image", defaultPath: it.file || "aipg-image.png" },
-    });
-  } catch (e) { toast("Save dialog unavailable: " + emsg(e)); return; }
-  if (!dest) return;
-  try { await invoke("image_export", { id: it.id, dest }); toast("Image saved"); } catch (e) { toast(emsg(e)); }
+  try { if (await invoke("image_export", { id: it.id })) toast("Image saved"); } catch (e) { toast(emsg(e)); }
 }
 function openLightbox(src, caption) {
   if (!src) return;
@@ -1593,7 +1622,7 @@ function renderNetwork(net, wk, jobs, totals) {
         <title>${esc(m.name)}</title>
         <rect x="${XM - 6}" y="${y - 6}" width="12" height="12" transform="rotate(45 ${XM} ${y})"/>
         <text class="nt" x="${XM + 18}" y="${y - 2}">${esc(clip(m.name, 36))}</text>
-        <text class="ns" x="${XM + 18}" y="${y + 13}">${esc(m.type)} · ${m.workers} worker${m.workers === 1 ? "" : "s"}</text></g>`;
+        <text class="ns" x="${XM + 18}" y="${y + 13}">${esc(m.type)} · ${esc(m.workers)} worker${m.workers === 1 ? "" : "s"}</text></g>`;
     });
     $("#netmap").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Workers and the models they serve">
       <text class="nh" x="${XW - 18}" y="14" text-anchor="end">WORKERS</text><text class="nh" x="${XM + 18}" y="14">MODELS</text>
@@ -1764,6 +1793,7 @@ document.addEventListener("DOMContentLoaded", () => {
   checkNewModels();
   bootAutostart();
   wireQuick();
+  loadOllamaSettings();
   $("#donate-copy").onclick = () => copyText($("#donate-addr").textContent.trim(), "Address copied");
   checkUpdate(false);
 });
@@ -1785,7 +1815,7 @@ async function quickAsk(text) {
 }
 async function applyQuickKey(report) {
   const stored = get("aipg_quickkey");
-  const key = stored == null ? "Alt+Space" : stored;
+  const key = stored == null ? "Ctrl+Shift+Space" : stored;
   const sel = $("#quickkey"); if (sel) sel.value = key;
   const base = "Opens a one-line prompt above all windows while the app is running. Enter sends it to a new chat.";
   try {

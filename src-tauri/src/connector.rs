@@ -102,7 +102,7 @@ pub fn connector_status(app: AppHandle) -> Result<ConnectorStatus, String> {
         daily_limit_usd: read_key_file(&app)["daily_limit_usd"].as_f64().unwrap_or(0.0),
         spent_today_usd: spent,
         requests_today: requests,
-        enabled: key_file(&app).exists(),
+        enabled: read_key_file(&app)["api_key"].as_str().map(|k| !k.trim().is_empty()).unwrap_or(false),
         claude_found: cfg_path.parent().map(|d| d.exists()).unwrap_or(false),
         claude_registered: registered,
         claude_config: cfg_path.to_string_lossy().into_owned(),
@@ -123,12 +123,9 @@ fn read_key_file(app: &AppHandle) -> Value {
 }
 
 /// Set the daily spending limit for requests made through the connector
-/// (0 removes it). Only possible while the connector is enabled.
+/// (0 removes it). It is kept when the connector is switched off and on.
 #[tauri::command]
 pub fn connector_limit_set(app: AppHandle, usd: f64) -> Result<(), String> {
-    if !key_file(&app).exists() {
-        return Err("Enable the connector first.".into());
-    }
     if !usd.is_finite() || usd < 0.0 {
         return Err("Enter an amount of 0 or more.".into());
     }
@@ -174,9 +171,18 @@ fn write_key_file(app: &AppHandle, cfg: &Value) -> Result<(), String> {
 /// Remove the stored key and the Claude Desktop registration.
 #[tauri::command]
 pub fn connector_disable(app: AppHandle) -> Result<(), String> {
+    // drop the key but keep the other settings (the daily limit)
     let path = key_file(&app);
     if path.exists() {
-        std::fs::remove_file(&path).map_err(e)?;
+        let mut cfg = read_key_file(&app);
+        if let Some(o) = cfg.as_object_mut() {
+            o.remove("api_key");
+        }
+        if cfg.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            std::fs::remove_file(&path).map_err(e)?;
+        } else {
+            write_key_file(&app, &cfg)?;
+        }
     }
     connector_claude_remove(app)
 }

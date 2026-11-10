@@ -14,7 +14,7 @@
   <em>Unofficial, community-built. Not affiliated with AI Power Grid.</em>
 </p>
 
-Built with [Tauri](https://tauri.app): a small, sandboxed native app that uses the OS
+Built with [Tauri](https://tauri.app): a small native app that uses the OS
 webview instead of bundling a browser. Installers are a few MB, not a few hundred.
 
 ## Install
@@ -43,15 +43,20 @@ running a worker is optional.
   prompt you send to the grid.
   - **Attachments** — drop, paste or pick text, code and PDF files; their text is sent
     along as context. Images can be attached for a local vision model (the grid has none).
-  - **Quick prompt** — a global shortcut (default `Alt+Space`, changeable or off in
+  - **Quick prompt** — a global shortcut (default `Ctrl+Shift+Space`, changeable or off in
     Settings) opens a one-line prompt above all windows and sends it to a new chat.
 - **Images** — text-to-image and image-to-image on the grid's image models, with format
   and count options, live generation progress, and a **local gallery** (save, reuse a
   prompt, use a result as the next source image). You choose the **folder the images
   are saved in**; the prompt box is full-width and remembers its height.
 - **Run a worker** — one click turns your machine into a grid worker and starts earning:
-  - downloads the **official** `grid-inference-worker` binary (SHA-256 verified),
-  - downloads and runs a **sandboxed, managed Ollama** — no system install required,
+  - downloads the **official** `grid-inference-worker` binary and checks it against a
+    SHA-256 that is fixed in this app's source code,
+  - downloads and runs its **own copy of Ollama** from the app's data folder, on its own
+    port (11511) and with its own model store — no system install, and separate from an
+    Ollama you already have (using yours instead is an explicit option),
+  - loads models with a **context length you choose** (default 8192) and reports the
+    same number to the grid,
   - detects your hardware (RAM / CPU / GPU) and **suggests a fitting model**, with a
     fallback to grid chat when the machine is too small,
   - shows live download progress (GB and %), lets you pick **where models are stored**,
@@ -66,7 +71,8 @@ running a worker is optional.
   Desktop, Claude Code, Cursor, …) offload work to the grid: run a text task, generate
   images, list models, check your credit. One click registers it with Claude Desktop.
   It runs on your machine (`aipg-desktop --mcp`), so hosted clients such as ChatGPT or
-  claude.ai in the browser cannot use it.
+  claude.ai in the browser cannot use it. After an app update, restart the assistant
+  program so it loads new or changed tools.
   Results state the estimated cost and your remaining credit; a quote tool estimates a
   cost beforehand, a worker-status tool reports your workers and recent log errors, and
   you can set a **daily spending limit** for assistants. Tool descriptions warn that
@@ -85,11 +91,19 @@ running a worker is optional.
 - Your API key is stored **locally** and sent only to `api.aipowergrid.io`.
 - If you enable the connector, the key is also written to a file in the app's data folder
   (owner-readable only on Linux/macOS) so the connector process can use it; disabling the
-  connector removes that file.
-- The app is sandboxed by Tauri's capability allowlist; its content-security policy only
-  permits connections to the grid API, `ntfy.sh`, and the local inference backend.
-- The managed Ollama and worker run as sandboxed child processes under the app's data
-  directory — no global install, and they're stopped when you quit.
+  connector removes the key from that file.
+- The worker gets the key through its environment, not its command line, and API keys
+  are blanked in the worker log.
+- The web page inside the app can only call the commands on Tauri's capability
+  allowlist. Its content-security policy permits connections to the grid API, `ntfy.sh`
+  and the two local Ollama ports (11511 for the app's own, 11434 for yours) only.
+- The app's Ollama and the worker are ordinary child processes (not an OS sandbox) that
+  live in the app's data directory — no global install. They are stopped when you quit;
+  on Windows they are also ended if the app is killed or crashes, and on every start the
+  app ends any of its own processes that a previous run left behind.
+- Downloads are verified against SHA-256 values fixed in the source code. That detects
+  a corrupted or swapped file; it does not make the upstream projects themselves trusted.
+- Only one instance of the app runs at a time.
 - No telemetry and no servers of ours: it talks directly to the grid.
 
 ## Build it yourself

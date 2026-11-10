@@ -18,7 +18,23 @@ use tokio::sync::Mutex;
 
 const WORKER_TAG: &str = "v0.3.13";
 const WORKER_REPO: &str = "AIPowerGrid/grid-text-worker";
-const OLLAMA: &str = "http://127.0.0.1:11434";
+/// Port of an Ollama the user installed themselves.
+const OLLAMA_SYSTEM_PORT: u16 = 11434;
+/// The app's own Ollama listens here, so it never shares a port, a model
+/// store or graphics memory bookkeeping with the user's Ollama.
+const OLLAMA_MANAGED_PORT: u16 = 11511;
+/// Set only when the user explicitly chose to use their own Ollama.
+static USE_SYSTEM_OLLAMA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The API key of the running worker, so it can be blanked in log lines.
+static REDACT_KEY: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn use_system_ollama() -> bool {
+    USE_SYSTEM_OLLAMA.load(std::sync::atomic::Ordering::SeqCst)
+}
+fn ollama_url() -> String {
+    let port = if use_system_ollama() { OLLAMA_SYSTEM_PORT } else { OLLAMA_MANAGED_PORT };
+    format!("http://127.0.0.1:{port}")
+}
 const OLLAMA_TAG: &str = "v0.40.15";
 
 #[derive(Default)]
@@ -122,7 +138,7 @@ fn worker_asset() -> Option<(&'static str, bool)> {
 async fn ollama_up() -> bool {
     matches!(
         reqwest::Client::new()
-            .get(format!("{OLLAMA}/api/version"))
+            .get(format!("{}/api/version", ollama_url()))
             .timeout(std::time::Duration::from_secs(2))
             .send()
             .await,
@@ -170,38 +186,55 @@ pub async fn prereqs(app: AppHandle) -> Prereqs {
     }
 }
 
+/// SHA-256 of the worker release assets, fixed here next to WORKER_TAG. A
+/// tampered or replaced GitHub release therefore cannot supply its own
+/// checksums: bumping the worker means changing these lines in a commit.
+fn worker_sha(asset: &str) -> Option<&'static str> {
+    match asset {
+        "grid-inference-worker-linux-x64" => Some("48f2c9ee598f9947cb2193be81eaa0753dc7e3a90c83b24890fa9a1a1f5bd430"),
+        "grid-inference-worker-linux-arm64" => Some("20aedf5fe4760ea2630293acd75ca3ba2d2775fe902e4b886eaa9021b1be0c55"),
+        "grid-inference-worker-macos-arm64.zip" => Some("980b18d57fe1668a2bd58e4588f24ff62e3e6443246de7afa617c43198797c6b"),
+        "grid-inference-worker-windows-x64.exe" => Some("7c2c262e9f08c6076f91a215039457ce436fabfbcbcc4c3beb8cc38320587d47"),
+        _ => None,
+    }
+}
+
+fn file_sha256(path: &std::path::Path) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut f, &mut hasher).ok()?;
+    Some(hex::encode(hasher.finalize()))
+}
+
 #[tauri::command]
 pub async fn download_worker(app: AppHandle) -> Result<String, String> {
     let (asset, is_zip) = worker_asset()
         .ok_or(format!("No official worker binary ({WORKER_TAG}) exists for this OS/architecture."))?;
+    let want_sha = worker_sha(asset).ok_or("No pinned checksum for this worker asset — aborting for safety.")?;
+    let dir = worker_dir(&app);
+    std::fs::create_dir_all(&dir).map_err(e)?;
+    let bin = worker_bin(&app);
+
+    // Already the pinned file (e.g. marker missing after an older app version)?
+    if !is_zip && bin.exists() {
+        let b = bin.clone();
+        let have = tokio::task::spawn_blocking(move || file_sha256(&b)).await.map_err(e)?;
+        if have.as_deref() == Some(want_sha) {
+            let _ = std::fs::write(worker_version_file(&app), WORKER_TAG);
+            return Ok(bin.to_string_lossy().into_owned());
+        }
+    }
+
     let base = format!("https://github.com/{WORKER_REPO}/releases/download/{WORKER_TAG}");
     let client = reqwest::Client::builder()
         .user_agent("aipg-desktop")
         .build()
         .map_err(e)?;
-
-    let manifest: serde_json::Value = client
-        .get(format!("{base}/worker-release.json"))
-        .send()
-        .await
-        .map_err(e)?
-        .json()
-        .await
-        .map_err(e)?;
-    let entry = manifest["assets"]
-        .as_array()
-        .and_then(|a| a.iter().find(|x| x["name"] == asset))
-        .ok_or("Asset not found in the release manifest.")?;
-    let want_sha = entry["sha256"].as_str().unwrap_or("").to_lowercase();
-    let total = entry["bytes"].as_u64().unwrap_or(0);
-    if want_sha.is_empty() {
-        return Err("No SHA-256 in the manifest — aborting for safety.".into());
-    }
-
     let resp = client.get(format!("{base}/{asset}")).send().await.map_err(e)?;
     if !resp.status().is_success() {
         return Err(format!("Download failed: HTTP {}", resp.status()));
     }
+    let total = resp.content_length().unwrap_or(0);
     let mut hasher = Sha256::new();
     let mut buf: Vec<u8> = Vec::with_capacity(total as usize);
     let mut stream = resp.bytes_stream();
@@ -217,20 +250,26 @@ pub async fn download_worker(app: AppHandle) -> Result<String, String> {
     if got != want_sha {
         return Err(format!(
             "SHA-256 mismatch (expected {}…, got {}…) — discarded.",
-            &want_sha[..12.min(want_sha.len())],
+            &want_sha[..12],
             &got[..12.min(got.len())]
         ));
     }
 
-    let dir = worker_dir(&app);
-    std::fs::create_dir_all(&dir).map_err(e)?;
-    let bin = worker_bin(&app);
+    // Write next to the target and swap it in, so a failed or interrupted
+    // write never leaves a half-written executable behind.
+    let tmp = dir.join("worker.download");
     if is_zip {
-        extract_single_from_zip(&buf, &bin)?;
+        extract_single_from_zip(&buf, &tmp)?;
     } else {
-        std::fs::write(&bin, &buf).map_err(e)?;
+        std::fs::write(&tmp, &buf).map_err(e)?;
     }
-    make_executable(&bin)?;
+    make_executable(&tmp)?;
+    if let Err(err) = std::fs::rename(&tmp, &bin) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "The worker file could not be replaced ({err}). It is probably still running: stop the worker and try again."
+        ));
+    }
     let _ = std::fs::write(worker_version_file(&app), WORKER_TAG);
     Ok(bin.to_string_lossy().into_owned())
 }
@@ -272,6 +311,17 @@ enum Arch {
     Zip,
 }
 
+fn ollama_sha(asset: &str) -> Option<&'static str> {
+    match asset {
+        "ollama-darwin.tgz" => Some("607c79d5d6315ef9d896db83adde736a4c0057196329843544e79b95afb260a8"),
+        "ollama-linux-amd64.tar.zst" => Some("628c018404a4206493efd38e46251c154ede5141b8b8dc85c659b3b027c47379"),
+        "ollama-linux-arm64.tar.zst" => Some("7f699ead5cdb4ae1ed89b888b148a238af188708800871e1889ab9dcee95f247"),
+        "ollama-windows-amd64.zip" => Some("9ca74a7ab66ec86870b1eecac7df160df08dc4e3a291ab5d2d59bcf9310221c6"),
+        "ollama-windows-arm64.zip" => Some("35ce5195b57496dbc9ecbaa6593807e6ac26cbb53cf1f8bb57ac58daafa58574"),
+        _ => None,
+    }
+}
+
 fn ollama_asset() -> Option<(&'static str, Arch)> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", _) => Some(("ollama-darwin.tgz", Arch::Tgz)),
@@ -297,21 +347,10 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
         .build()
         .map_err(e)?;
 
-    // expected sha from the release checksum file
-    let sums = client
-        .get(format!("{base}/sha256sum.txt"))
-        .send()
-        .await
-        .map_err(e)?
-        .text()
-        .await
-        .map_err(e)?;
-    let want_sha = sums
-        .lines()
-        .find(|l| l.trim_end().ends_with(asset))
-        .and_then(|l| l.split_whitespace().next())
-        .map(|s| s.to_lowercase())
-        .ok_or("Checksum for the Ollama asset not found.")?;
+    // expected SHA-256, fixed here next to OLLAMA_TAG (not read from the release)
+    let want_sha = ollama_sha(asset)
+        .ok_or("No pinned checksum for this Ollama asset — aborting for safety.")?
+        .to_string();
 
     let root = ollama_root(&app);
     std::fs::create_dir_all(&root).map_err(e)?;
@@ -393,6 +432,9 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
     if ollama_up().await {
         return Ok(());
     }
+    if use_system_ollama() {
+        return Err("Your own Ollama does not answer on port 11434. Start it, or switch back to the app's Ollama under “Run a worker”.".into());
+    }
     let bin = if let Some(b) = managed_ollama_bin(&app) {
         b
     } else if system_ollama().await {
@@ -405,8 +447,10 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
     std::fs::create_dir_all(&models).map_err(e)?;
     let mut cmd = Command::new(&bin);
     cmd.arg("serve")
-        .env("OLLAMA_HOST", "127.0.0.1:11434")
+        .env("OLLAMA_HOST", format!("127.0.0.1:{OLLAMA_MANAGED_PORT}"))
         .env("OLLAMA_MODELS", &models)
+        // the worker advertises this same value to the grid (see worker_start)
+        .env("OLLAMA_CONTEXT_LENGTH", ollama_ctx(&app).to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
@@ -422,6 +466,7 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
     let child = cmd
         .spawn()
         .map_err(|x| format!("Could not start Ollama: {x}"))?;
+    crate::job::adopt(&child);
     *state.ollama.lock().await = Some(child);
 
     for _ in 0..60 {
@@ -431,13 +476,13 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
             return Ok(());
         }
     }
-    Err("Ollama was started but does not answer on port 11434.".into())
+    Err(format!("Ollama was started but does not answer on port {OLLAMA_MANAGED_PORT}."))
 }
 
 #[tauri::command]
 pub async fn ollama_models() -> Result<Vec<String>, String> {
     let v: serde_json::Value = reqwest::Client::new()
-        .get(format!("{OLLAMA}/api/tags"))
+        .get(format!("{}/api/tags", ollama_url()))
         .send()
         .await
         .map_err(e)?
@@ -460,7 +505,7 @@ pub struct LocalModel {
 #[tauri::command]
 pub async fn ollama_list() -> Result<Vec<LocalModel>, String> {
     let v: serde_json::Value = reqwest::Client::new()
-        .get(format!("{OLLAMA}/api/tags"))
+        .get(format!("{}/api/tags", ollama_url()))
         .send()
         .await
         .map_err(e)?
@@ -485,7 +530,7 @@ pub async fn ollama_list() -> Result<Vec<LocalModel>, String> {
 #[tauri::command]
 pub async fn ollama_delete(model: String) -> Result<(), String> {
     let r = reqwest::Client::new()
-        .delete(format!("{OLLAMA}/api/delete"))
+        .delete(format!("{}/api/delete", ollama_url()))
         .json(&serde_json::json!({ "name": model, "model": model }))
         .send()
         .await
@@ -500,7 +545,7 @@ pub async fn ollama_delete(model: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn ollama_pull(app: AppHandle, model: String) -> Result<(), String> {
     let resp = reqwest::Client::new()
-        .post(format!("{OLLAMA}/api/pull"))
+        .post(format!("{}/api/pull", ollama_url()))
         .json(&serde_json::json!({ "name": model, "stream": true }))
         .send()
         .await
@@ -826,13 +871,32 @@ pub async fn worker_start(
     };
 
     let mut cmd = Command::new(&bin);
-    cmd.args(["--no-gui", "--no-browser"])
-        .arg("--api-key")
-        .arg(cfg.api_key.trim())
+    // One backend, declared explicitly: this also overrides a GRID_BACKENDS
+    // entry in a .env left by a stand-alone worker install. With the app's
+    // Ollama the advertised context is capped at what Ollama really loads.
+    let mut backend = serde_json::json!({
+        "type": "ollama",
+        "url": ollama_url(),
+        "model": cfg.model.trim(),
+        "grid_model": format!("grid/{}", cfg.model.trim()),
+        "name": name,
+        "concurrency": 1,
+    });
+    if !use_system_ollama() {
+        backend["max_context"] = serde_json::json!(ollama_ctx(&app));
+    }
+    if let Ok(mut k) = REDACT_KEY.lock() {
+        *k = cfg.api_key.trim().to_string();
+    }
+    // The key goes in through the environment, not the command line, where
+    // every local user could read it in the process list.
+    cmd.env("GRID_API_KEY", cfg.api_key.trim())
+        .env("GRID_BACKENDS", serde_json::json!([backend]).to_string())
+        .args(["--no-gui", "--no-browser"])
         .arg("--model")
         .arg(cfg.model.trim())
         .arg("--backend-url")
-        .arg(OLLAMA)
+        .arg(ollama_url())
         .arg("--worker-name")
         .arg(&name);
     // Give the worker's local dashboard a free port to avoid "port 7861 in use".
@@ -851,6 +915,7 @@ pub async fn worker_start(
     let mut child = cmd
         .spawn()
         .map_err(|x| format!("Failed to start the worker: {x}"))?;
+    crate::job::adopt(&child);
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     *state.worker.lock().await = Some(child);
@@ -863,6 +928,7 @@ pub async fn worker_start(
         tokio::spawn(async move {
             let mut lines = BufReader::new(out).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                let line = redact(&line);
                 log_append(&app2, &line);
                 let _ = app2.emit("worker-log", line);
             }
@@ -903,6 +969,7 @@ where
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            let line = redact(&line);
             log_append(&app, &line);
             let _ = app.emit("worker-log", line);
         }
@@ -1139,6 +1206,113 @@ pub fn config_bool(app: &AppHandle, key: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn config_patch(app: &AppHandle, key: &str, val: serde_json::Value) -> Result<(), String> {
+    let mut cfg = std::fs::read_to_string(config_path(app))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    cfg[key] = val;
+    std::fs::create_dir_all(data_dir(app)).map_err(e)?;
+    std::fs::write(config_path(app), cfg.to_string()).map_err(e)
+}
+
+/// Context window the app's Ollama loads models with. The same number is
+/// given to the worker as the limit it advertises to the grid, so prompts
+/// are never accepted that the model would silently cut off.
+fn ollama_ctx(app: &AppHandle) -> u64 {
+    std::fs::read_to_string(config_path(app))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v["ollama_ctx"].as_u64())
+        .unwrap_or(8192)
+        .clamp(2048, 131_072)
+}
+
+/// Read the saved choice once at startup.
+pub fn init_runtime(app: &AppHandle) {
+    USE_SYSTEM_OLLAMA.store(
+        config_bool(app, "use_system_ollama", false),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+}
+
+#[derive(Serialize)]
+pub struct OllamaSettings {
+    base: String,
+    ctx: u64,
+    use_system: bool,
+    managed_port: u16,
+}
+
+#[tauri::command]
+pub fn ollama_settings(app: AppHandle) -> OllamaSettings {
+    OllamaSettings {
+        base: ollama_url(),
+        ctx: ollama_ctx(&app),
+        use_system: use_system_ollama(),
+        managed_port: OLLAMA_MANAGED_PORT,
+    }
+}
+
+/// Change the context length and/or which Ollama is used. Stops the app's
+/// Ollama so the next start picks the new values up.
+#[tauri::command]
+pub async fn ollama_settings_set(
+    app: AppHandle,
+    state: State<'_, Arc<Procs>>,
+    ctx: u64,
+    use_system: bool,
+) -> Result<OllamaSettings, String> {
+    if state.worker.lock().await.is_some() {
+        return Err("Stop the worker before changing these settings.".into());
+    }
+    if !(2048..=131_072).contains(&ctx) {
+        return Err("Context length must be between 2048 and 131072.".into());
+    }
+    if let Some(mut c) = state.ollama.lock().await.take() {
+        let _ = c.start_kill();
+        let _ = c.wait().await;
+    }
+    config_patch(&app, "ollama_ctx", serde_json::json!(ctx))?;
+    config_patch(&app, "use_system_ollama", serde_json::json!(use_system))?;
+    USE_SYSTEM_OLLAMA.store(use_system, std::sync::atomic::Ordering::SeqCst);
+    Ok(ollama_settings(app))
+}
+
+/// Kill worker and Ollama processes that an earlier run of the app left
+/// behind (crash, forced close). They live under the app's data folder, so
+/// nothing the user installed themselves is touched.
+pub fn sweep_orphans(app: &AppHandle) -> usize {
+    let dirs = [worker_dir(app), ollama_dist(app)];
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let me = sysinfo::get_current_pid().ok();
+    let mut n = 0;
+    for (pid, p) in sys.processes() {
+        if Some(*pid) == me {
+            continue;
+        }
+        let Some(exe) = p.exe() else { continue };
+        if dirs.iter().any(|d| exe.starts_with(d)) && p.kill() {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Blank API keys in a line before it is shown, stored or handed to an
+/// assistant: the running worker's exact key, and anything shaped like one.
+pub(crate) fn redact(line: &str) -> String {
+    let mut out = line.to_string();
+    if let Ok(k) = REDACT_KEY.lock() {
+        if k.len() >= 8 && out.contains(k.as_str()) {
+            out = out.replace(k.as_str(), "grid_…");
+        }
+    }
+    crate::mcp::redact_keys(&out)
+}
+
 /* ------------------------- image gallery (local files) ------------------------- */
 
 fn images_dir(app: &AppHandle) -> PathBuf {
@@ -1221,6 +1395,17 @@ pub async fn image_store(
             .decode(b64.trim())
             .map_err(e)?
     } else if src.starts_with("https://") {
+        // only the grid's own hosts — never an arbitrary URL handed in by the page
+        let host = src["https://".len()..].split(['/', '?', '#']).next().unwrap_or("");
+        let ok = !host.contains('@')
+            && !host.contains(':')
+            && (host == "aipg.art"
+                || host.ends_with(".aipg.art")
+                || host == "aipowergrid.io"
+                || host.ends_with(".aipowergrid.io"));
+        if !ok {
+            return Err("Images are only fetched from AI Power Grid hosts.".into());
+        }
         let r = reqwest::Client::builder()
             .user_agent("aipg-desktop")
             .build()
@@ -1290,12 +1475,26 @@ pub fn image_remove(app: AppHandle, id: String) -> Result<(), String> {
     images_save(&app, &list)
 }
 
-/// Copy a gallery image to a location the user picked in the save dialog.
+/// Copy a gallery image to a location the user picks. The save dialog is
+/// opened here, so the destination never comes from the page. Returns false
+/// when the dialog was cancelled.
 #[tauri::command]
-pub fn image_export(app: AppHandle, id: String, dest: String) -> Result<(), String> {
-    std::fs::copy(image_file(&app, &id)?, PathBuf::from(dest))
-        .map(|_| ())
-        .map_err(e)
+pub async fn image_export(app: AppHandle, id: String) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let src = image_file(&app, &id)?;
+    let name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "aipg-image.png".into());
+    let app2 = app.clone();
+    let picked = tokio::task::spawn_blocking(move || {
+        app2.dialog().file().set_title("Save image").set_file_name(name).blocking_save_file()
+    })
+    .await
+    .map_err(e)?;
+    let Some(dest) = picked else { return Ok(false) };
+    let dest = dest.into_path().map_err(e)?;
+    std::fs::copy(src, dest).map(|_| true).map_err(e)
 }
 
 #[derive(Serialize)]

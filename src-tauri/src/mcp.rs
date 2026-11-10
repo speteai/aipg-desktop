@@ -46,23 +46,42 @@ impl Ctx {
             .and_then(|v| v["daily_limit_usd"].as_f64())
             .filter(|x| *x > 0.0)
     }
-    /// Refuse a request whose worst case would exceed today's limit.
-    fn check_limit(&self, worst_case: f64) -> Result<(), String> {
-        let Some(limit) = self.daily_limit() else { return Ok(()) };
-        let (spent, _) = spend_today(&self.data_dir());
-        if spent + worst_case > limit {
-            return Err(format!(
-                "Not sent: the daily spending limit for assistants is {} and {} is already used today; this request could cost up to {}. The limit resets at UTC midnight. Do not retry — the user can raise it in AIPG Desktop → Connect.",
-                money(limit), money(spent), money(worst_case)
-            ));
-        }
-        Ok(())
-    }
-    fn add_spend(&self, usd: f64) {
+    /// Reserve the worst case of a request against today's limit, or refuse
+    /// it. Check and booking happen under one lock, because every assistant
+    /// program runs its own connector process against the same ledger.
+    /// `worst_case` is None when no price is published for the model.
+    fn reserve(&self, worst_case: Option<f64>) -> Result<f64, String> {
+        let limit = self.daily_limit();
+        let worst = match (worst_case, limit) {
+            (Some(w), _) => w,
+            (None, None) => 0.0,
+            (None, Some(_)) => {
+                return Err("Not sent: no price is published for this model, so the request cannot be checked against the daily spending limit for assistants. Pick a model with a price (grid_models) — or the user can remove the limit in AIPG Desktop → Connect.".into())
+            }
+        };
         let dir = self.data_dir();
-        let (spent, requests) = spend_today(&dir);
-        let v = json!({ "day": utc_day(), "usd": spent + usd.max(0.0), "requests": requests + 1 });
-        let _ = std::fs::write(dir.join(SPEND_FILE), v.to_string());
+        with_spend_lock(&dir, || {
+            let (spent, requests) = spend_today(&dir);
+            if let Some(limit) = limit {
+                if spent + worst > limit {
+                    return Err(format!(
+                        "Not sent: the daily spending limit for assistants is {} and {} is already used today; this request could cost up to {}. The limit resets at UTC midnight. Do not retry — the user can raise it in AIPG Desktop → Connect.",
+                        money(limit), money(spent), money(worst)
+                    ));
+                }
+            }
+            write_spend(&dir, spent + worst, requests);
+            Ok(worst)
+        })
+    }
+    /// Replace a reservation by what the request really cost (0 when it was
+    /// never billed). `billed` counts it as a paid request.
+    fn settle(&self, reserved: f64, actual: f64, billed: bool) {
+        let dir = self.data_dir();
+        with_spend_lock(&dir, || {
+            let (spent, requests) = spend_today(&dir);
+            write_spend(&dir, (spent - reserved + actual.max(0.0)).max(0.0), requests + billed as u64);
+        });
     }
     fn data_dir(&self) -> PathBuf {
         self.key_file
@@ -103,6 +122,71 @@ pub fn spend_today(data_dir: &Path) -> (f64, u64) {
         .filter(|v| v["day"].as_u64() == Some(utc_day()))
         .map(|v| (v["usd"].as_f64().unwrap_or(0.0), v["requests"].as_u64().unwrap_or(0)))
         .unwrap_or((0.0, 0))
+}
+
+fn write_spend(dir: &Path, usd: f64, requests: u64) {
+    let v = json!({ "day": utc_day(), "usd": usd, "requests": requests });
+    let tmp = dir.join(format!("{SPEND_FILE}.{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, v.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, dir.join(SPEND_FILE));
+    }
+}
+
+/// Run `f` while holding the ledger's lock file. Waits up to three seconds;
+/// a lock older than ten seconds belongs to a process that died and is taken over.
+fn with_spend_lock<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+    let lock = dir.join("connector_spend.lock");
+    let _ = std::fs::create_dir_all(dir);
+    let mut held = false;
+    for _ in 0..60 {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&lock) {
+            Ok(_) => {
+                held = true;
+                break;
+            }
+            Err(_) => {
+                let stale = std::fs::metadata(&lock)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| d.as_secs() >= 10)
+                    .unwrap_or(false);
+                if stale {
+                    let _ = std::fs::remove_file(&lock);
+                } else {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+    }
+    let out = f();
+    if held {
+        let _ = std::fs::remove_file(&lock);
+    }
+    out
+}
+
+/// Blank anything shaped like a grid API key (`grid_` + 16 or more letters
+/// and digits).
+pub fn redact_keys(line: &str) -> String {
+    if !line.contains("grid_") {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(i) = rest.find("grid_") {
+        let after = &rest[i + 5..];
+        let n = after.chars().take_while(|c| c.is_ascii_alphanumeric()).count();
+        out.push_str(&rest[..i + 5]);
+        if n >= 16 {
+            out.push('…');
+            rest = &after[n..];
+        } else {
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Small amounts need more digits than a balance does.
@@ -503,11 +587,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     // worst case for the spending limit: full answer length at this model's price
     let input_est = approx_tokens(prompt) + system.map(approx_tokens).unwrap_or(0);
     let before = if model == "auto" { worst_text_rates(&models) } else { text_rates(&models, &model) };
-    if let Some(r) = before {
-        ctx.check_limit(text_cost(r, input_est, max_tokens))?;
-    } else {
-        ctx.check_limit(0.0)?;
-    }
+    let reserved = ctx.reserve(before.map(|r| text_cost(r, input_est, max_tokens)))?;
 
     let mut messages = Vec::new();
     if let Some(sys) = system {
@@ -524,22 +604,32 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         Some(level) => {
             let mut with = body.clone();
             if level == "off" {
+                // three spellings of "do not think": vLLM chat template,
+                // Ollama's native switch, and the portable effort level
                 with["chat_template_kwargs"] = json!({ "enable_thinking": false });
+                with["think"] = json!(false);
                 with["reasoning_effort"] = json!("low");
             } else {
                 with["reasoning_effort"] = json!(level);
             }
             match post_json(ctx, "/chat/completions", &with, 600).await {
-                Ok(d) => d,
+                Ok(d) => Ok(d),
                 // a backend that rejects the option outright: send it plain
                 Err(err) if err.contains("(HTTP 400)") || err.contains("(HTTP 422)") => {
                     reasoning_note = " · the reasoning option was rejected and left out";
-                    post_json(ctx, "/chat/completions", &body, 600).await?
+                    post_json(ctx, "/chat/completions", &body, 600).await
                 }
-                Err(err) => return Err(err),
+                Err(err) => Err(err),
             }
         }
-        None => post_json(ctx, "/chat/completions", &body, 600).await?,
+        None => post_json(ctx, "/chat/completions", &body, 600).await,
+    };
+    let d = match d {
+        Ok(d) => d,
+        Err(err) => {
+            ctx.settle(reserved, 0.0, false); // nothing was billed
+            return Err(err);
+        }
     };
 
     let choice = &d["choices"][0];
@@ -562,7 +652,8 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
             note.push_str(&format!(" · cost about {} (list price)", money(c)));
         }
     }
-    ctx.add_spend(cost.unwrap_or(0.0));
+    // unknown price: keep the reservation rather than booking nothing
+    ctx.settle(reserved, cost.unwrap_or(reserved), true);
     note.push_str(reasoning_note);
     if let Some(id) = d["id"].as_str() {
         note.push_str(&served_by(ctx, id).await);
@@ -695,6 +786,8 @@ async fn grid_worker_status(ctx: &Ctx) -> Result<Vec<Value>, String> {
     }
     match std::fs::read_to_string(ctx.data_dir().join("worker.log")) {
         Ok(log) => {
+            // never hand an API key to the assistant, whatever the worker printed
+            let log = redact_keys(&log);
             let all: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
             let bad = |l: &&str| {
                 let l = l.to_lowercase();
@@ -777,10 +870,20 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
         }
     };
     let per_image = book_rates(&price_book(ctx).await, &model).and_then(|r| r["per_image_usd"].as_f64());
-    ctx.check_limit(per_image.unwrap_or(0.0) * n as f64)?;
+    let reserved = ctx.reserve(per_image.map(|p| p * n as f64))?;
     let body = json!({ "model": model, "prompt": prompt, "n": n, "size": size });
-    let d = post_json(ctx, "/images/generations", &body, 900).await?;
+    let d = match post_json(ctx, "/images/generations", &body, 900).await {
+        Ok(d) => d,
+        Err(err) => {
+            ctx.settle(reserved, 0.0, false); // nothing was billed
+            return Err(err);
+        }
+    };
     let items = d["data"].as_array().cloned().unwrap_or_default();
+    // The grid has billed at this point: book it now, so an image that later
+    // fails to download or save is still counted.
+    let made = items.len().max(1) as f64;
+    ctx.settle(reserved, per_image.unwrap_or(0.0) * made, true);
     let dir = ctx.images_dir();
     let files = ctx.image_files_dir();
     let mut content = Vec::new();
@@ -823,8 +926,6 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
     if lines.is_empty() {
         return Err("The grid returned no image data.".into());
     }
-    let made = items.len().max(1) as f64;
-    ctx.add_spend(per_image.unwrap_or(0.0) * made);
     let mut bill = match per_image {
         Some(p) => format!("Cost about {} ({} per image, list price).", money(p * made), money(p)),
         None => "No list price is published for this model.".to_string(),

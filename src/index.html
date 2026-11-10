@@ -181,13 +181,24 @@
         <div class="card">
           <h3>Ollama</h3>
           <div id="ollama-state" class="chips"><span class="chip">checking…</span></div>
-          <p class="hint">The local model backend. The app can download and run it sandboxed — no system install.</p>
+          <p class="hint">The local model backend. The app downloads its own copy into its data folder and runs it on its own port — no system install, and separate from an Ollama you already have.</p>
           <div class="row">
             <button class="btn" id="btn-setup-ollama">Set up Ollama</button>
             <button class="btn ghost" id="btn-ollama">Start</button>
           </div>
           <div id="olbar" class="pbar" style="display:none"><span></span></div>
           <p class="hint" id="olmsg"></p>
+          <div class="row" style="margin-top:10px;align-items:center">
+            <span class="k">Context</span>
+            <select id="ollama-ctx" class="sel">
+              <option value="4096">4096 tokens</option>
+              <option value="8192">8192 tokens</option>
+              <option value="16384">16384 tokens</option>
+              <option value="32768">32768 tokens</option>
+            </select>
+          </div>
+          <label style="display:block;margin-top:8px"><input type="checkbox" id="ollama-own"> Use my own Ollama (port 11434) instead</label>
+          <p class="hint" id="ollama-note"></p>
         </div>
         <div class="card">
           <h3>Worker binary</h3>
@@ -373,8 +384,8 @@
         <label>Quick prompt shortcut</label>
         <div class="row">
           <select id="quickkey" class="sel">
-            <option value="Alt+Space">Alt + Space</option>
             <option value="Ctrl+Shift+Space">Ctrl + Shift + Space</option>
+            <option value="Alt+Space">Alt + Space (clashes with the Windows window menu and PowerToys Run)</option>
             <option value="Ctrl+Alt+G">Ctrl + Alt + G</option>
             <option value="">Off</option>
           </select>

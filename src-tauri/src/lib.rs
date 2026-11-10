@@ -6,6 +6,7 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 mod connector;
+mod job;
 mod mcp;
 mod worker;
 use worker::Procs;
@@ -81,6 +82,11 @@ pub fn run() {
     let procs = Arc::new(Procs::default());
 
     tauri::Builder::default()
+        // Must be the first plugin: a second launch only brings the running
+        // window to the front instead of starting a second worker and Ollama.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -115,6 +121,8 @@ pub fn run() {
             worker::worker_stop,
             worker::worker_running,
             worker::models_dir_get,
+            worker::ollama_settings,
+            worker::ollama_settings_set,
             worker::models_dir_set,
             worker::config_get,
             worker::config_set,
@@ -143,6 +151,9 @@ pub fn run() {
         .setup(|app| {
             // System tray: keep the worker earning while the window is closed.
             let handle = app.handle().clone();
+            worker::init_runtime(&handle);
+            // nothing of ours may still be running from a crashed earlier run
+            worker::sweep_orphans(&handle);
             let show = MenuItem::with_id(&handle, "show", "Open AIPG Desktop", true, None::<&str>)?;
             let quit = MenuItem::with_id(&handle, "quit", "Quit", true, None::<&str>)?;
             let menu = MenuBuilder::new(&handle).item(&show).item(&quit).build()?;
