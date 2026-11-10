@@ -525,6 +525,9 @@ pub struct Hardware {
     note: String,
     /// memory (GB) a model may use: VRAM on a real GPU, otherwise RAM
     budget_gb: f64,
+    /// memory of the GPU a model can be loaded into (0 = no usable GPU);
+    /// on Apple Silicon a share of the unified memory
+    vram_gb: f64,
 }
 
 #[tauri::command]
@@ -569,6 +572,16 @@ pub async fn hardware() -> Hardware {
         recommend,
         note,
         budget_gb: (budget * 10.0).round() / 10.0,
+        vram_gb: {
+            let v = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                ram_gb * 0.7
+            } else if vram_gb >= 4.0 {
+                vram_gb
+            } else {
+                0.0
+            };
+            (v * 10.0).round() / 10.0
+        },
     }
 }
 
