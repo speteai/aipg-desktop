@@ -395,7 +395,7 @@ function wprog(frac, text) {
 function renderPrereqs(p) {
   if (!p.supported) {
     $("#wunsupported").style.display = "";
-    $("#wunsupported").innerHTML = `There is no official worker binary (v0.3.12) for <b>${esc(p.os)}/${esc(p.arch)}</b>. ` +
+    $("#wunsupported").innerHTML = `There is no official worker binary (${esc(p.worker_tag || "")}) for <b>${esc(p.os)}/${esc(p.arch)}</b>. ` +
       `Supported: Linux x64/arm64, macOS (Apple Silicon), Windows x64.`;
   } else $("#wunsupported").style.display = "none";
 

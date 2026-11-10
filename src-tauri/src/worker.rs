@@ -16,7 +16,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-const WORKER_TAG: &str = "v0.3.12";
+const WORKER_TAG: &str = "v0.3.13";
 const WORKER_REPO: &str = "AIPowerGrid/grid-text-worker";
 const OLLAMA: &str = "http://127.0.0.1:11434";
 const OLLAMA_TAG: &str = "v0.40.15";
@@ -65,6 +65,17 @@ fn worker_bin(app: &AppHandle) -> PathBuf {
         "grid-inference-worker"
     };
     worker_dir(app).join(name)
+}
+/// Records which release the downloaded worker binary is, so an app update
+/// that pins a newer worker fetches it instead of keeping the old file.
+fn worker_version_file(app: &AppHandle) -> PathBuf {
+    worker_dir(app).join("version.txt")
+}
+fn worker_current(app: &AppHandle) -> bool {
+    worker_bin(app).exists()
+        && std::fs::read_to_string(worker_version_file(app))
+            .map(|s| s.trim() == WORKER_TAG)
+            .unwrap_or(false)
 }
 fn ollama_root(app: &AppHandle) -> PathBuf {
     data_dir(app).join("ollama")
@@ -136,6 +147,8 @@ pub struct Prereqs {
     arch: String,
     supported: bool,
     worker_downloaded: bool,
+    /// the worker release this app version pins
+    worker_tag: String,
     ollama_running: bool,
     ollama_installed: bool,
     ollama_managed: bool,
@@ -149,7 +162,8 @@ pub async fn prereqs(app: AppHandle) -> Prereqs {
         os: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
         supported: worker_asset().is_some(),
-        worker_downloaded: worker_bin(&app).exists(),
+        worker_downloaded: worker_current(&app),
+        worker_tag: WORKER_TAG.into(),
         ollama_running: running,
         ollama_installed: running || managed || system_ollama().await,
         ollama_managed: managed,
@@ -159,7 +173,7 @@ pub async fn prereqs(app: AppHandle) -> Prereqs {
 #[tauri::command]
 pub async fn download_worker(app: AppHandle) -> Result<String, String> {
     let (asset, is_zip) = worker_asset()
-        .ok_or("No official worker binary (v0.3.12) exists for this OS/architecture.")?;
+        .ok_or(format!("No official worker binary ({WORKER_TAG}) exists for this OS/architecture."))?;
     let base = format!("https://github.com/{WORKER_REPO}/releases/download/{WORKER_TAG}");
     let client = reqwest::Client::builder()
         .user_agent("aipg-desktop")
@@ -217,6 +231,7 @@ pub async fn download_worker(app: AppHandle) -> Result<String, String> {
         std::fs::write(&bin, &buf).map_err(e)?;
     }
     make_executable(&bin)?;
+    let _ = std::fs::write(worker_version_file(&app), WORKER_TAG);
     Ok(bin.to_string_lossy().into_owned())
 }
 
