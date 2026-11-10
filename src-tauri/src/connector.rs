@@ -77,6 +77,8 @@ pub struct ConnectorStatus {
     claude_found: bool,
     claude_registered: bool,
     claude_config: String,
+    /// Private values in assistant requests: "mask", "block" or "off".
+    protect: String,
     /// Daily spending limit for assistants in USD; 0 = none.
     daily_limit_usd: f64,
     /// Estimated spend and number of paid requests through the connector today (UTC).
@@ -99,6 +101,11 @@ pub fn connector_status(app: AppHandle) -> Result<ConnectorStatus, String> {
     let entry = json!({ "command": launcher, "args": ["--mcp", key] });
     let (spent, requests) = crate::mcp::spend_today(&crate::worker::data_dir(&app));
     Ok(ConnectorStatus {
+        protect: match read_key_file(&app)["protect"].as_str() {
+            Some("block") => "block".into(),
+            Some("off") => "off".into(),
+            _ => "mask".into(),
+        },
         daily_limit_usd: read_key_file(&app)["daily_limit_usd"].as_f64().unwrap_or(0.0),
         spent_today_usd: spent,
         requests_today: requests,
@@ -131,6 +138,17 @@ pub fn connector_limit_set(app: AppHandle, usd: f64) -> Result<(), String> {
     }
     let mut cfg = read_key_file(&app);
     cfg["daily_limit_usd"] = json!(usd);
+    write_key_file(&app, &cfg)
+}
+
+/// How the connector treats private values in assistant requests.
+#[tauri::command]
+pub fn connector_protect_set(app: AppHandle, mode: String) -> Result<(), String> {
+    if !["mask", "block", "off"].contains(&mode.as_str()) {
+        return Err("Unknown setting.".into());
+    }
+    let mut cfg = read_key_file(&app);
+    cfg["protect"] = json!(mode);
     write_key_file(&app, &cfg)
 }
 

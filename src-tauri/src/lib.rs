@@ -8,6 +8,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 mod connector;
 mod job;
 mod mcp;
+mod privacy;
 mod worker;
 use worker::Procs;
 
@@ -145,6 +146,7 @@ pub fn run() {
             connector::connector_enable,
             connector::connector_disable,
             connector::connector_limit_set,
+            connector::connector_protect_set,
             connector::connector_claude_add,
             connector::connector_claude_remove,
         ])

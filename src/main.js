@@ -1082,7 +1082,16 @@ function loadCurrentChat() {
   fillChatModels().then(() => { if (c.model && [...$("#chatmodel").options].some((o) => o.value === c.model)) $("#chatmodel").value = c.model; });
   $("#chatcap").value = String(STORE.cap);
   $("#chatsum").checked = STORE.summarize;
+  applyLocalOnly(c);
   renderMessages();
+}
+// A "Local only" chat can use local models only; the grid choice is locked.
+function applyLocalOnly(c) {
+  $("#chatlocal").checked = !!c.localOnly;
+  const grid = document.querySelector('input[name=chatsrc][value="grid"]');
+  const local = document.querySelector('input[name=chatsrc][value="local"]');
+  if (grid) grid.disabled = !!c.localOnly;
+  if (c.localOnly && local && !local.checked) { local.checked = true; c.src = "local"; }
 }
 
 /* message list actually sent, honoring the context cap + summary */
@@ -1104,14 +1113,17 @@ function buildSend(c) {
 }
 
 async function simpleComplete(src, model, prompt) {
+  // runs in the background, so it masks without asking
+  const sm = src === "grid" && protectMode() !== "off" ? Privacy.makeMask() : null;
   const url = (src === "grid" ? API : OLLAMA_LOCAL) + "/chat/completions";
   const headers = { "Content-Type": "application/json" };
   if (src === "grid") headers["Authorization"] = "Bearer " + apiKey();
   const r = await fetch(url, {
     method: "POST", headers,
-    body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: 400 }),
+    body: JSON.stringify({ model, messages: [{ role: "user", content: sm ? sm.apply(prompt) : prompt }], stream: false, max_tokens: 400 }),
   });
   const d = await r.json(); if (!r.ok) throw new Error((d && d.detail) || ("HTTP " + r.status));
+  if (sm && sm.count) { const t = d.choices && d.choices[0] && d.choices[0].message; if (t && typeof t.content === "string") t.content = sm.restore(t.content); }
   return (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "";
 }
 
@@ -1123,6 +1135,49 @@ async function ensureSummary(c, src, model) {
   const prompt = (c.summary ? "Earlier summary:\n" + c.summary + "\n\n" : "") +
     "Summarize the conversation so far in a concise paragraph, keeping key facts and decisions:\n" + older;
   try { const s = await simpleComplete(src, model, prompt); if (s) { c.summary = s.trim(); c.summaryCount = olderEnd; } } catch (e) {}
+}
+
+/* ---------- private data in grid requests: ask, mask, restore ---------- */
+function protectMode() { const m = get("aipg_protect"); return m === "mask" || m === "off" ? m : "ask"; }
+const PRIV_ACK = {}; // chat id -> Set of values the user chose to send unmasked (this session only)
+// A dialog with several buttons; resolves with the chosen value (null on Esc / click outside).
+function askChoice(message, title, buttons) {
+  return new Promise((resolve) => {
+    const ov = document.createElement("div"); ov.className = "overlay confirm";
+    const card = document.createElement("div"); card.className = "card welcomecard";
+    const h = document.createElement("div"); h.className = "brand"; h.style.padding = "0 0 6px"; h.textContent = title;
+    const p = document.createElement("p"); p.className = "muted"; p.style.whiteSpace = "pre-wrap"; p.textContent = message;
+    const row = document.createElement("div"); row.className = "row"; row.style.cssText = "margin-top:14px;justify-content:flex-end;display:flex;gap:8px;flex-wrap:wrap";
+    const done = (v) => { document.removeEventListener("keydown", onKey, true); ov.remove(); resolve(v); };
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(null); } };
+    let first = null;
+    buttons.forEach((b) => {
+      const el = document.createElement("button"); el.className = "btn" + (b.primary ? " primary" : " ghost"); el.textContent = b.label;
+      el.onclick = () => done(b.value); row.appendChild(el); if (b.primary) first = el;
+    });
+    card.appendChild(h); card.appendChild(p); card.appendChild(row); ov.appendChild(card);
+    ov.addEventListener("mousedown", (e) => { if (e.target === ov) done(null); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(ov); if (first) first.focus();
+  });
+}
+// Decide what happens to private values in the texts of one grid request.
+// Returns a mask to use (possibly with nothing to mask), or null to cancel.
+async function privacyGate(chatId, texts) {
+  const mode = protectMode();
+  if (mode === "off") return Privacy.makeMask();
+  const ack = PRIV_ACK[chatId] || (PRIV_ACK[chatId] = new Set());
+  const hits = texts.flatMap((t) => Privacy.find(t)).filter((h) => !ack.has(h.value));
+  if (!hits.length || mode === "mask") return Privacy.makeMask(ack);
+  const choice = await askChoice(
+    `This message goes to a computer run by someone else on the grid, and it contains: ${Privacy.summary(hits)}.\n\n` +
+    "Mask: the values are replaced by placeholders before sending and put back into the answer, so the other computer never sees them.\n" +
+    "Send as typed: the values leave this computer in plain text.",
+    "Private data in this message",
+    [{ label: "Cancel", value: "cancel" }, { label: "Send as typed", value: "raw" }, { label: "Mask and send", value: "mask", primary: true }]);
+  if (choice === "raw") { hits.forEach((h) => ack.add(h.value)); return Privacy.makeMask(ack); }
+  if (choice === "mask") return Privacy.makeMask(ack);
+  return null;
 }
 
 /* ---------- chat attachments: text/code/PDF as context, images for local vision ---------- */
@@ -1210,6 +1265,13 @@ async function chatSend() {
   const src = chatSource(), model = $("#chatmodel").value;
   if (src === "grid" && !apiKey()) { toast("Save your API key in Settings first"); return show("settings"); }
   if (src === "local" && !model) { toast("No local model — pull one under “Run a worker”"); return; }
+  if (c.localOnly && src !== "local") { toast("This chat is “Local only” — it cannot be sent to the grid"); return; }
+  // Before anything is shown or stored: may this text go to the grid as it is?
+  let mask = null;
+  if (src === "grid") {
+    mask = await privacyGate(c.id, [...c.msgs.map((m) => m.content), c.summary || "", text]);
+    if (!mask) return; // cancelled: the text is still in the box
+  }
   c.src = src; c.model = model;
 
   ta.value = ""; ta.style.height = "auto";
@@ -1231,7 +1293,12 @@ async function chatSend() {
   CHAT_ABORT = new AbortController();
 
   await ensureSummary(c, src, model);
-  const sendMsgs = buildSend(c);
+  let sendMsgs = buildSend(c);
+  if (mask && protectMode() !== "off") {
+    sendMsgs = sendMsgs.map((m) => (typeof m.content === "string" ? { ...m, content: mask.apply(m.content) } : m));
+    if (mask.count) sendMsgs.unshift({ role: "system", content: Privacy.NOTE });
+  }
+  const shown = (t) => (mask && mask.count ? mask.restore(t) : t);
   const url = (src === "grid" ? API : OLLAMA_LOCAL) + "/chat/completions";
   const headers = { "Content-Type": "application/json" };
   if (src === "grid") headers["Authorization"] = "Bearer " + apiKey();
@@ -1255,7 +1322,7 @@ async function chatSend() {
         try {
           const j = JSON.parse(line);
           const delta = (j.choices && j.choices[0] && j.choices[0].delta) || {};
-          if (delta.content) { acc += delta.content; body.textContent = acc; }
+          if (delta.content) { acc += delta.content; body.textContent = shown(acc); }
           if (delta.reasoning_content) think += delta.reasoning_content;
           $("#chatlog").scrollTop = 1e9;
         } catch (e) {}
@@ -1263,11 +1330,12 @@ async function chatSend() {
     }
     if (!acc && think) acc = "(only reasoning returned) " + think.slice(0, 500);
     if (!acc) acc = "(empty response)";
+    acc = shown(acc);
     body.textContent = acc;
     c.msgs.push({ role: "assistant", content: acc, model: label });
     c.updated = Date.now();
   } catch (e) {
-    if (e.name === "AbortError") { body.textContent = acc + " …[stopped]"; c.msgs.push({ role: "assistant", content: acc, model: label }); }
+    if (e.name === "AbortError") { acc = shown(acc); body.textContent = acc + " …[stopped]"; c.msgs.push({ role: "assistant", content: acc, model: label }); }
     else { body.textContent = "⚠ " + emsg(e); c.msgs.pop(); }
   } finally {
     $("#chatsend").style.display = ""; $("#chatstop").style.display = "none"; CHAT_ABORT = null;
@@ -1281,6 +1349,12 @@ function wireChat() {
   $("#chatmodel").onchange = () => { const c = curChat(); if (c) { c.model = $("#chatmodel").value; storePersist(); } };
   $("#chatcap").onchange = () => { STORE.cap = parseInt($("#chatcap").value, 10) || 0; storePersist(); };
   $("#chatsum").onchange = () => { STORE.summarize = $("#chatsum").checked; storePersist(); };
+  $("#chatlocal").onchange = () => {
+    const c = curChat(); if (!c) return;
+    c.localOnly = $("#chatlocal").checked;
+    applyLocalOnly(c); fillChatModels(); storePersist();
+    toast(c.localOnly ? "This chat now stays on this computer" : "This chat may use the grid again");
+  };
   $("#chatsend").onclick = chatSend;
   $("#chatstop").onclick = () => { if (CHAT_ABORT) CHAT_ABORT.abort(); };
   $("#chatnew").onclick = () => addChat(true);
@@ -1358,6 +1432,12 @@ async function imgGenerate() {
   const key = apiKey(); if (!key) { toast("Save your API key in Settings first"); return show("settings"); }
   const model = $("#imgmodel").value; if (!model) { toast("No image model available"); return; }
   const prompt = $("#imgprompt").value.trim(); if (!prompt) { toast("Enter a prompt"); return; }
+  if (protectMode() !== "off") {
+    const hits = Privacy.find(prompt);
+    if (hits.length && !(await askConfirm(
+      `The image prompt contains: ${Privacy.summary(hits)}.\n\nImage prompts go to someone else's computer in plain text and cannot be masked. Send it anyway?`,
+      "Private data in the prompt"))) return;
+  }
   const size = $("#imgsize").value, n = parseInt($("#imgcount").value, 10) || 1;
   const mode = imgMode();
   const token = "d" + newId() + newId();
@@ -1686,6 +1766,7 @@ function renderConnect(st) {
     : st.claude_found ? "Claude Desktop found on this computer."
     : "Claude Desktop was not found here; the entry is written anyway and used once it is installed.";
   $("#cn-claude-path").textContent = st.claude_config;
+  $("#cn-protect").value = st.protect || "mask";
   if (document.activeElement !== $("#cn-limit")) $("#cn-limit").value = st.daily_limit_usd ? String(st.daily_limit_usd) : "";
   const fm = (x) => "$" + (x && x < 0.01 ? x.toFixed(6) : (x || 0).toFixed(4));
   $("#cn-spent").textContent =
@@ -1718,6 +1799,7 @@ async function loadConnect() {
       run("connector_limit_set", { usd }, usd ? "Daily limit saved" : "Daily limit removed");
     };
     $("#cn-limit-save").onclick = saveLimit;
+    $("#cn-protect").onchange = () => run("connector_protect_set", { mode: $("#cn-protect").value }, "Saved");
     $("#cn-limit").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("#cn-limit").blur(); saveLimit(); } });
     $("#cn-claude-add").onclick = () => run("connector_claude_add", {}, "Added. Restart Claude Desktop.");
     $("#cn-claude-remove").onclick = () => run("connector_claude_remove", {}, "Removed from Claude Desktop");
@@ -1802,6 +1884,8 @@ document.addEventListener("DOMContentLoaded", () => {
   checkNewModels();
   bootAutostart();
   wireQuick();
+  $("#protect").value = protectMode();
+  $("#protect").onchange = () => { set("aipg_protect", $("#protect").value); toast("Saved"); };
   loadOllamaSettings();
   $("#donate-copy").onclick = () => copyText($("#donate-addr").textContent.trim(), "Address copied");
   checkUpdate(false);

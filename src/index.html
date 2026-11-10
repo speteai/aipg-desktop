@@ -62,6 +62,7 @@
               </select>
             </label>
             <label class="seg" title="Summarize older messages instead of dropping them"><input type="checkbox" id="chatsum"> Summarize</label>
+            <label class="seg" title="This chat never leaves this computer: it can only use a local model"><input type="checkbox" id="chatlocal"> Local only</label>
           </div>
           <p class="hint" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
           <div id="chatlog" class="chatlog"></div>
@@ -320,6 +321,19 @@
         </div>
         <div id="cn-clients" style="display:none">
           <div class="field" style="max-width:none">
+            <label>Private data in assistant requests</label>
+            <div class="row">
+              <select id="cn-protect" class="sel">
+                <option value="mask">Mask and restore (recommended)</option>
+                <option value="block">Refuse the request</option>
+                <option value="off">Off — send as written</option>
+              </select>
+            </div>
+            <p class="hint">Applies to what an assistant sends through the connector: keys, passwords, e-mail addresses,
+              IBANs, card and phone numbers. Image prompts cannot be masked and are refused instead. Every answer is
+              handed to the assistant marked as untrusted third-party content.</p>
+          </div>
+          <div class="field" style="max-width:none">
             <label>Daily spending limit for assistants</label>
             <div class="row">
               <input id="cn-limit" type="text" inputmode="decimal" placeholder="e.g. 0.50 (USD per day, empty = no limit)" autocomplete="off" spellcheck="false">
@@ -388,6 +402,20 @@
         <label><input type="checkbox" id="closetray"> Minimize to tray when the window is closed</label>
         <p class="hint">Closing the window then keeps the app (and a running worker) alive in the background.
           Quit completely via right-click on the tray icon → “Quit”.</p>
+      </div>
+      <div class="field" id="field-protect">
+        <label>Private data in grid requests</label>
+        <div class="row">
+          <select id="protect" class="sel">
+            <option value="ask">Ask before sending (recommended)</option>
+            <option value="mask">Always mask, without asking</option>
+            <option value="off">Off — send everything as typed</option>
+          </select>
+        </div>
+        <p class="hint">Grid requests are answered on computers run by independent people. Before a chat message goes
+          there, the app looks for keys, passwords, e-mail addresses, IBANs, card and phone numbers. Masking replaces
+          them by placeholders and puts the real values back into the answer, so the other computer never sees them.
+          It only catches clearly shaped values, not confidential text in general — use a “Local only” chat for that.</p>
       </div>
       <div class="field" id="field-quick">
         <label>Quick prompt shortcut</label>
@@ -462,6 +490,7 @@
   <div id="lightbox" class="overlay lightbox" style="display:none"><img alt=""><p></p></div>
 
   <div id="toast" class="toast"></div>
-  <script src="main.js"></script>
+  <script src="privacy.js"></script>
+<script src="main.js"></script>
 </body>
 </html>
