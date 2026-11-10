@@ -421,6 +421,7 @@ async function refreshOllamaModels() {
   try { list = await invoke("ollama_list"); } catch (e) { list = null; }
   $("#wmodels-list").innerHTML = (list || []).map((m) => `<option value="${esc(m.name)}">`).join("");
   renderLocalModels(list);
+  LOCAL_MODELS = list || []; renderModelPicker();
   return list || [];
 }
 
@@ -546,7 +547,80 @@ async function pickModelsDir() {
 
 function resetModelsDir() { return switchModelsDir(""); }
 
+/* ---------- model picker: what fits this machine, plus any other tag ----------
+   dl = download size, need = memory the model wants (both GB, approximate). */
+const MODEL_CATALOG = [
+  { tag: "llama3.2:1b", dl: 1.3, need: 3, main: true, note: "Tiny and fast — for machines with little memory." },
+  { tag: "llama3.2:3b", dl: 2.0, need: 5, main: true, note: "Solid small model." },
+  { tag: "qwen3:4b", dl: 2.6, need: 5, note: "Small reasoning model." },
+  { tag: "gemma3:4b", dl: 3.3, need: 6, note: "Small Google model, good at languages." },
+  { tag: "qwen3:8b", dl: 5.2, need: 10, main: true, note: "Good all-rounder." },
+  { tag: "deepseek-r1:8b", dl: 5.2, need: 10, note: "Reasoning model." },
+  { tag: "gemma3:12b", dl: 8.1, need: 14, note: "Mid-size Google model." },
+  { tag: "qwen3:14b", dl: 9.3, need: 18, main: true, note: "Stronger answers, needs a capable GPU." },
+  { tag: "gpt-oss:20b", dl: 14, need: 20, note: "OpenAI's open-weight model." },
+  { tag: "qwen3:30b", dl: 19, need: 28, main: true, note: "Large model for 24 GB+ GPUs or big unified memory." },
+];
+let HW = null, LOCAL_MODELS = [], GRID_TAGS = null;
+// best pick = the largest mainstream model that fits the memory budget
+function suggestedModel(h) {
+  const b = h && h.budget_gb;
+  if (!b) return (h && h.recommend) || "";
+  const fit = MODEL_CATALOG.filter((m) => m.main && m.need <= b);
+  return fit.length ? fit[fit.length - 1].tag : "";
+}
+async function loadGridTags() {
+  try {
+    const list = await pubGet("/status/models");
+    GRID_TAGS = new Set((Array.isArray(list) ? list : []).filter((m) => m.type === "text")
+      .map((m) => String(m.name).toLowerCase().replace(/^grid\//, "")));
+  } catch (e) { GRID_TAGS = null; }
+  renderModelPicker();
+}
+function renderModelPicker() {
+  const box = $("#mpick-list"); if (!box || !HW) return;
+  const b = HW.budget_gb || 0, best = suggestedModel(HW);
+  const have = new Set(LOCAL_MODELS.map((m) => String(m.name).toLowerCase()));
+  $("#mpick-hint").textContent = b
+    ? `About ${b} GB of memory is available for a model on this machine. Sizes are approximate.`
+    : "Sizes are approximate.";
+  box.innerHTML = MODEL_CATALOG.map((m) => {
+    const fits = !b || m.need <= b, inst = have.has(m.tag);
+    const tags =
+      (m.tag === best ? '<span class="chip run">recommended</span>' : "") +
+      (!fits ? '<span class="chip">too large here</span>' : "") +
+      (GRID_TAGS && GRID_TAGS.has(m.tag) ? '<span class="chip">on the grid now</span>' : "") +
+      (inst ? '<span class="chip">installed</span>' : "");
+    return `<div class="lmrow mprow${fits ? "" : " big"}"><code class="path">${esc(m.tag)}</code>` +
+      `<span class="mpinfo">${esc(m.note)}<small>${m.dl} GB download · needs about ${m.need} GB</small></span>` +
+      `<span class="mptags">${tags}</span>` +
+      `<button class="btn ghost" data-mpuse="${esc(m.tag)}">Use</button>` +
+      `<button class="btn${m.tag === best && !inst ? " primary" : ""}" data-mpdl="${esc(m.tag)}">${inst ? "Update" : "Download"}</button></div>`;
+  }).join("");
+  box.querySelectorAll("[data-mpuse]").forEach((x) => (x.onclick = () => applyModel(x.dataset.mpuse)));
+  box.querySelectorAll("[data-mpdl]").forEach((x) => (x.onclick = () => downloadPicked(x.dataset.mpdl, x)));
+}
+async function downloadPicked(tag, btn) {
+  tag = (tag || "").trim(); if (!tag) { toast("Enter a model tag"); return; }
+  const m = MODEL_CATALOG.find((c) => c.tag === tag);
+  if (m && HW && HW.budget_gb && m.need > HW.budget_gb &&
+      !(await askConfirm(`${tag} needs about ${m.need} GB, this machine has about ${HW.budget_gb} GB for models.\n\nIt will likely be very slow or fail to load. Download anyway?`, "Model may be too large", false))) return;
+  if (btn) btn.disabled = true;
+  applyModel(tag);
+  await pullModel(tag);
+  if (btn) btn.disabled = false;
+}
+function wireModelPicker() {
+  $("#mpother-use").onclick = () => { const t = $("#mpother").value.trim(); if (t) applyModel(t); else toast("Enter a model tag"); };
+  $("#mpother-dl").onclick = () => downloadPicked($("#mpother").value, $("#mpother-dl"));
+  $("#mpother").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#mpother-dl").click(); });
+  $("#mpother-lib").onclick = (e) => { e.preventDefault(); openExternal("https://ollama.com/library"); };
+}
+
 function renderHardware(h) {
+  HW = h; h.recommend = suggestedModel(h) || h.recommend;
+  if (!get("aipg_wmodel")) $("#mpick").open = true;
+  renderModelPicker(); loadGridTags();
   $("#hwpanel").innerHTML =
     `<span><span class="k">RAM</span> <b>${h.ram_gb} GB</b></span>` +
     `<span><span class="k">CPU</span> <b>${esc(h.cpu)}</b></span>` +
@@ -554,8 +628,11 @@ function renderHardware(h) {
     (h.recommend
       ? `<span><span class="k">Suggested model</span> <b>${esc(h.recommend)}</b>` +
         ` <button class="btn ghost" id="use-suggested" data-m="${esc(h.recommend)}">Use</button>` +
-        ` <button class="btn ghost" id="dl-suggested" data-m="${esc(h.recommend)}">Download</button></span>`
+        ` <button class="btn ghost" id="dl-suggested" data-m="${esc(h.recommend)}">Download</button>` +
+        ` <button class="btn ghost" id="more-models">More models…</button></span>`
       : "");
+  const mm = $("#more-models");
+  if (mm) mm.onclick = () => { $("#mpick").open = true; $("#mpick").scrollIntoView({ block: "start", behavior: "smooth" }); };
   const u = $("#use-suggested");
   if (u) u.onclick = () => applyModel(u.dataset.m);
   const dls = $("#dl-suggested");
@@ -692,6 +769,7 @@ async function autoStartWorker() {
 
 function wireWorker() {
   WORKER_WIRED = true;
+  wireModelPicker();
 
   listen("worker-dl", (e) => {
     const { received, total } = e.payload || {};

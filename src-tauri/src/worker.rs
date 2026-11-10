@@ -523,6 +523,8 @@ pub struct Hardware {
     can_run_worker: bool,
     recommend: String,
     note: String,
+    /// memory (GB) a model may use: VRAM on a real GPU, otherwise RAM
+    budget_gb: f64,
 }
 
 #[tauri::command]
@@ -566,6 +568,7 @@ pub async fn hardware() -> Hardware {
         can_run_worker,
         recommend,
         note,
+        budget_gb: (budget * 10.0).round() / 10.0,
     }
 }
 

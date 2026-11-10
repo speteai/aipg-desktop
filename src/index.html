@@ -137,6 +137,20 @@
       <div id="hwfallback" class="banner" style="display:none"></div>
       <div id="wunsupported" class="banner" style="display:none"></div>
 
+      <details class="adv" id="mpick">
+        <summary>Choose a model for this machine</summary>
+        <p class="hint" id="mpick-hint"></p>
+        <div id="mpick-list"></div>
+        <div class="lmrow mpother">
+          <span class="k">Other</span>
+          <input id="mpother" type="text" placeholder="any Ollama tag, e.g. mistral:7b" autocomplete="off" spellcheck="false">
+          <button class="btn ghost" id="mpother-use">Use</button>
+          <button class="btn" id="mpother-dl">Download</button>
+        </div>
+        <p class="hint">Any model from the Ollama library works — enter its tag exactly as listed there.
+          <a href="#" id="mpother-lib">Browse the Ollama library →</a></p>
+      </details>
+
       <!-- one-click -->
       <div class="field" style="max-width:none">
         <div class="row">

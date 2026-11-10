@@ -590,6 +590,14 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .sub{font:600 var(--t-micro)/1.3 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:var(--s4) 0 var(--s2)}
 .lmrow{display:flex;align-items:center;gap:var(--s3);padding:var(--s2) 0;border-bottom:1px solid var(--bd)}
 .lmrow .path{flex:1 1 auto;max-width:none}
+#mpick .mprow{flex-wrap:wrap}
+#mpick .mprow .path{flex:0 0 17ch}
+#mpick .mprow .mpinfo{flex:1 1 220px;min-width:0;color:var(--mut);font-size:var(--t-small)}
+#mpick .mprow .mpinfo small{display:block;color:var(--faint);font:var(--t-micro)/1.5 var(--mono)}
+#mpick .mprow.big .path,#mpick .mprow.big .mpinfo{opacity:.55}
+#mpick .mptags{display:flex;gap:var(--s1);flex-wrap:wrap}
+#mpick .mpother input{flex:1 1 220px;min-width:0}
+#mpick .mpother .k{color:var(--mut);font:var(--t-micro)/1 var(--mono);letter-spacing:.08em;text-transform:uppercase}
 .lmrow .muted{min-width:7ch;text-align:right;font-family:var(--mono)}
 
 /* image gallery */
