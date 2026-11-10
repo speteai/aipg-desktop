@@ -1805,20 +1805,26 @@ async function checkUpdate(manual) {
   try {
     const v = await invoke("update_check");
     if (v) {
-      $("#updmsg").textContent = `Version ${v} is available.`;
+      $("#updmsg").textContent = `Version ${v} is available.` + (WORKER_RUNNING ? " Installing stops the worker briefly; it starts again afterwards." : "");
       $("#btn-update-install").style.display = "";
       if (!manual) toast(`Update ${v} available — see Settings`);
     } else if (manual) $("#updmsg").textContent = "You are on the latest version.";
   } catch (e) { if (manual) $("#updmsg").textContent = "Update check failed: " + emsg(e); }
 }
 async function installUpdate() {
-  if (WORKER_RUNNING && !(await askConfirm(
-    "Installing the update stops the running worker and restarts the app. Continue?", "Install update", false))) return;
+  // No question asked: a running worker is stopped for the update and started
+  // again when the new version opens.
+  const resume = WORKER_RUNNING || !!RESTART_T;
   $("#btn-update-install").disabled = true; $("#btn-update").disabled = true;
-  $("#updmsg").textContent = "Downloading update…";
+  $("#updmsg").textContent = resume
+    ? "Downloading update… the worker is stopped for the update and starts again afterwards."
+    : "Downloading update…";
+  if (resume) set("aipg_resume_worker", "1");
   WANT_RUNNING = false;
   try { await invoke("update_install"); }
   catch (e) {
+    set("aipg_resume_worker", "0");
+    WANT_RUNNING = WORKER_RUNNING;
     $("#updmsg").textContent = "Update failed: " + emsg(e);
     $("#btn-update-install").disabled = false; $("#btn-update").disabled = false;
   }
@@ -1830,7 +1836,10 @@ async function cfgSet(obj) { try { await invoke("config_set", { data: JSON.strin
 async function cfgPatch(key, val) { const c = await cfgGet(); c[key] = val; await cfgSet(c); }
 
 async function bootAutostart() {
-  if (!TAURI.core || get("aipg_autostart") !== "1" || !apiKey()) return;
+  // the worker was running when an update was installed: bring it back once
+  const resume = get("aipg_resume_worker") === "1";
+  if (resume) set("aipg_resume_worker", "0");
+  if (!TAURI.core || !(resume || get("aipg_autostart") === "1") || !apiKey()) return;
   try { if (await invoke("worker_running")) return; } catch (e) { return; }
   show("worker"); // populates fields + lets the user watch progress
   $("#wname2").value = get("aipg_wname") || "";
