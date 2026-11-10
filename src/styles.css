@@ -610,3 +610,24 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .stat .v small{font-size:.55em;font-weight:400;color:var(--mut)}
 /* connect view */
 .cnpre{max-height:none;white-space:pre-wrap;word-break:break-all;user-select:all;margin:0 0 var(--s2)}
+
+/* network view */
+.netmap{margin:var(--s4) 0 var(--s2);border-top:1px solid var(--bd);border-bottom:1px solid var(--bd);overflow-x:auto}
+.netmap svg{display:block;width:100%;min-width:680px;height:auto}
+.netmap .nh{fill:var(--mut);font:var(--t-micro) var(--mono);letter-spacing:.08em}
+.netmap .nt{fill:var(--fg);font:12.5px var(--mono)}
+.netmap .ns{fill:var(--mut);font:10.5px var(--mono)}
+.netmap .nl{fill:none;stroke:var(--bd-strong);stroke-width:1}
+.netmap .nl.used{stroke:var(--mut)}
+.netmap .nl.hot{stroke:var(--acc-fill);stroke-width:1.6}
+.netmap .nl.fresh{stroke:var(--acc-fill);stroke-width:2.4;animation:pulse 1s ease-in-out 6}
+.netmap .nw rect{fill:var(--ok)}
+.netmap .nw.off rect{fill:none;stroke:var(--danger)}
+.netmap .nw.hot rect{fill:var(--acc-fill);animation:pulse 1.2s ease-in-out infinite}
+.netmap .nw.mine .nt{font-weight:700}
+.netmap .nm rect{fill:var(--fg)}
+.netmap .nm.img rect{fill:none;stroke:var(--fg);stroke-width:1.5}
+.netlegend .lgi{white-space:nowrap;margin-right:var(--s4)}
+.netlegend .lg{display:inline-block;width:18px;height:0;border-top:1px solid var(--bd-strong);vertical-align:middle;margin-right:6px}
+.netlegend .lg.used{border-top-color:var(--mut)}
+.netlegend .lg.hot{border-top:2px solid var(--acc-fill)}

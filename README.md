@@ -54,6 +54,9 @@ running a worker is optional.
   - restarts the worker automatically if it crashes.
 - **Overview / Models / Earnings** — spendable balance with today's free allowance, workers online (retired workers
   can be hidden), den earned and jobs; live model list with prices; recent jobs plus a **local earnings-history graph**.
+- **Network** — a live diagram of the grid: which workers are online, which models they
+  serve, who handled the latest jobs. (The grid publishes no worker locations, so it is a
+  structure view, not a geographic map.)
 - **Connect** — a local **MCP connector** lets assistants on the same computer (Claude
   Desktop, Claude Code, Cursor, …) offload work to the grid: run a text task, generate
   images, list models, check your credit. One click registers it with Claude Desktop.

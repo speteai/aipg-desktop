@@ -1239,6 +1239,118 @@ function show(view) {
   if (view === "models") loadModels();
   if (view === "earnings") loadEarnings();
   if (view === "connect") loadConnect();
+  if (view === "network") loadNetwork();
+}
+
+/* ---------- network: live structure of the grid (public data, no key) ----------
+   The grid publishes no worker locations, so this is a diagram of who serves
+   what, not a geographic map. Workers light up when they served a job recently. */
+let NET_T = null, NET_SEEN = null, NET_BUSY = false;
+const NET_RECENT = 10 * 60 * 1000; // a worker counts as "active" this long after a job
+function pubGet(path) {
+  return fetch(API + path, { headers: { "Accept": "application/json" } }).then((r) => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  });
+}
+function timeAgo(iso) {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 90) return Math.round(s) + " s ago";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+function renderNetwork(net, wk, jobs, totals) {
+  const cap = net.capacity || {}, val = net.validators || {};
+  const day = (totals && totals.day) || {};
+  const jobsToday = Object.values(day).reduce((a, x) => a + (x.jobs || 0), 0);
+  $("#netstats").innerHTML =
+    stat("Network", esc(net.status || "—"), net.status === "operational" ? "green" : "") +
+    stat("Workers online", cap.workers_online ?? wk.filter((w) => w.online).length, "blue") +
+    stat("Models online", cap.models_online ?? (cap.models || []).length, "") +
+    stat("Jobs today", jobsToday, "") +
+    stat("Validators", val.participating ?? "—", "", val.registered_active != null ? `${val.registered_active} registered` : "");
+
+  // activity per worker and per worker→model link, from the public job feed
+  const act = {}, linkAct = {}, fresh = new Set();
+  const seenNow = new Set(jobs.map((j) => j.job_id));
+  for (const j of jobs) {
+    const t = new Date(j.created).getTime();
+    const a = (act[j.worker] = act[j.worker] || { n: 0, last: 0 });
+    a.n++; a.last = Math.max(a.last, t);
+    const k = j.worker + "\u0000" + j.model;
+    linkAct[k] = Math.max(linkAct[k] || 0, t);
+    if (NET_SEEN && !NET_SEEN.has(j.job_id)) fresh.add(k);
+  }
+  NET_SEEN = seenNow;
+
+  const mine = new Set((typeof LAST_WORKERS !== "undefined" ? LAST_WORKERS : []).map((w) => w.name));
+  const workers = wk.slice().sort((a, b) =>
+    String((a.job_types || [])[0]).localeCompare(String((b.job_types || [])[0])) || a.name.localeCompare(b.name));
+  const models = (cap.models || []).slice().sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
+  if (!workers.length) { $("#netmap").innerHTML = '<p class="muted">No workers are online right now.</p>'; }
+  else {
+    const ROW = 44, W = 920, XW = 350, XM = 570, PAD = 26;
+    const H = Math.max(workers.length, models.length) * ROW + PAD * 2;
+    const ys = (n) => { const span = (n - 1) * ROW, top = (H - span) / 2; return (i) => top + i * ROW; };
+    const yw = ys(workers.length), ym = ys(models.length), now = Date.now();
+    const mIdx = Object.fromEntries(models.map((m, i) => [m.name, i]));
+    let links = "", nodes = "";
+    workers.forEach((w, i) => {
+      for (const m of w.models || []) {
+        if (!(m in mIdx)) continue;
+        const k = w.name + "\u0000" + m, t = linkAct[k] || 0;
+        const cls = "nl" + (fresh.has(k) ? " fresh" : "") + (t && now - t < NET_RECENT ? " hot" : t ? " used" : "");
+        const y1 = yw(i), y2 = ym(mIdx[m]), mx = (XW + XM) / 2;
+        links += `<path class="${cls}" d="M${XW + 7} ${y1} C${mx} ${y1}, ${mx} ${y2}, ${XM - 7} ${y2}"/>`;
+      }
+      const a = act[w.name], hot = a && now - a.last < NET_RECENT, y = yw(i);
+      const sub = a ? `${a.n} job${a.n === 1 ? "" : "s"} · last ${timeAgo(new Date(a.last).toISOString())}` : "no recent jobs";
+      nodes += `<g class="nw${w.online ? "" : " off"}${hot ? " hot" : ""}${mine.has(w.name) ? " mine" : ""}">
+        <title>${esc(w.name)} — ${esc((w.models || []).join(", "))}</title>
+        <rect x="${XW - 6}" y="${y - 6}" width="12" height="12"/>
+        <text class="nt" x="${XW - 18}" y="${y - 2}" text-anchor="end">${esc(clip(w.name, 34))}${mine.has(w.name) ? " (yours)" : ""}</text>
+        <text class="ns" x="${XW - 18}" y="${y + 13}" text-anchor="end">${esc(sub)}</text></g>`;
+    });
+    models.forEach((m, i) => {
+      const y = ym(i);
+      nodes += `<g class="nm ${m.type === "image" ? "img" : "txt"}">
+        <title>${esc(m.name)}</title>
+        <rect x="${XM - 6}" y="${y - 6}" width="12" height="12" transform="rotate(45 ${XM} ${y})"/>
+        <text class="nt" x="${XM + 18}" y="${y - 2}">${esc(clip(m.name, 36))}</text>
+        <text class="ns" x="${XM + 18}" y="${y + 13}">${esc(m.type)} · ${m.workers} worker${m.workers === 1 ? "" : "s"}</text></g>`;
+    });
+    $("#netmap").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Workers and the models they serve">
+      <text class="nh" x="${XW - 18}" y="14" text-anchor="end">WORKERS</text><text class="nh" x="${XM + 18}" y="14">MODELS</text>
+      ${links}${nodes}</svg>`;
+  }
+
+  $("#netfeed").innerHTML = jobs.slice(0, 15).map((j) => `<tr>
+      <td class="muted">${esc(timeAgo(j.created))}</td><td>${esc(j.worker)}</td><td>${esc(j.model)}</td>
+      <td>${esc(j.type)}</td><td>${j.duration_s != null ? Number(j.duration_s).toFixed(1) + " s" : "—"}</td>
+      <td>+${Number(j.den || 0).toFixed(2)}</td></tr>`).join("")
+    || '<tr><td colspan="6" class="muted">No recent jobs.</td></tr>';
+  $("#netstamp").textContent = "Updated " + new Date().toLocaleTimeString() + " · refreshes every 15 s";
+}
+
+async function loadNetwork() {
+  if (NET_BUSY) return;
+  NET_BUSY = true;
+  try {
+    const [net, wk, jobs, totals] = await Promise.all([
+      pubGet("/status/network"), pubGet("/workers"), pubGet("/jobs/recent?limit=100"),
+      pubGet("/stats/totals").catch(() => null),
+    ]);
+    renderNetwork(net, wk.workers || [], jobs.jobs || [], totals);
+  } catch (e) {
+    $("#netstamp").textContent = "Could not load the network: " + emsg(e);
+  } finally { NET_BUSY = false; }
+  if (!NET_T) NET_T = setInterval(() => {
+    if ($("#view-network").classList.contains("active")) loadNetwork();
+    else { clearInterval(NET_T); NET_T = null; }
+  }, 15000);
 }
 
 /* ---------- connect: local MCP connector for Claude & co. ---------- */

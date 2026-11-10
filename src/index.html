@@ -14,6 +14,7 @@
     <button class="nav" data-view="images"><span class="ni"></span> Images</button>
     <button class="nav" data-view="worker"><span class="ni"></span> Run a worker<span id="navjob" class="navjob" title="Serving a grid job"></span></button>
     <button class="nav" data-view="models"><span class="ni"></span> Models</button>
+    <button class="nav" data-view="network"><span class="ni"></span> Network</button>
     <button class="nav" data-view="earnings"><span class="ni"></span> Earnings</button>
     <button class="nav" data-view="connect"><span class="ni"></span> Connect</button>
     <button class="nav" data-view="settings"><span class="ni"></span> Settings</button>
@@ -229,6 +230,21 @@
       <div id="models" class="cards"><p class="muted">—</p></div>
       <h2 class="sec">Image</h2>
       <div id="imgmodels" class="cards"><p class="muted">—</p></div>
+    </section>
+
+    <!-- NETWORK -->
+    <section class="view" id="view-network">
+      <header class="vh"><h1>Network</h1><span id="netstamp" class="muted"></span></header>
+      <p class="muted">Who is serving the grid right now. The grid publishes no worker locations, so this
+        shows which worker serves which model rather than a geographic map.</p>
+      <div class="stats" id="netstats"></div>
+      <div id="netmap" class="netmap"><p class="muted">Loading…</p></div>
+      <p class="hint netlegend"><span class="lgi"><span class="lg hot"></span>served a job in the last 10 minutes</span>
+        <span class="lgi"><span class="lg used"></span>served one of the last 100 jobs</span>
+        <span class="lgi"><span class="lg"></span>online, idle</span></p>
+      <h2 class="sec">Latest jobs on the grid</h2>
+      <table><thead><tr><th>When</th><th>Worker</th><th>Model</th><th>Type</th><th>Duration</th><th>Den</th></tr></thead>
+        <tbody id="netfeed"><tr><td colspan="6" class="muted">—</td></tr></tbody></table>
     </section>
 
     <!-- EARNINGS -->
