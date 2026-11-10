@@ -43,7 +43,8 @@ running a worker is optional.
   prompt you send to the grid.
 - **Images** — text-to-image and image-to-image on the grid's image models, with format
   and count options, live generation progress, and a **local gallery** (save, reuse a
-  prompt, use a result as the next source image).
+  prompt, use a result as the next source image). You choose the **folder the images
+  are saved in**; the prompt box is full-width and remembers its height.
 - **Run a worker** — one click turns your machine into a grid worker and starts earning:
   - downloads the **official** `grid-inference-worker` binary (SHA-256 verified),
   - downloads and runs a **sandboxed, managed Ollama** — no system install required,

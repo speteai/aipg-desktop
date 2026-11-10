@@ -1141,6 +1141,36 @@ function addLooseImage(src, meta) {
   $("#imgresult").prepend(card);
 }
 
+function showImagesDir(d) {
+  $("#images-dir").textContent = d.path;
+  $("#images-dir").title = d.path;
+  $("#btn-images-dir-reset").style.display = d.custom ? "" : "none";
+}
+async function loadImagesDir() {
+  if (!TAURI.core) return;
+  try { showImagesDir(await invoke("images_dir_get")); } catch (e) {}
+}
+async function switchImagesDir(path) {
+  try {
+    const d = await invoke("images_dir_set", { path });
+    showImagesDir(d);
+    toast(d.moved ? `Images folder updated · ${d.moved} image${d.moved === 1 ? "" : "s"} moved` : "Images folder updated");
+  } catch (e) { toast(emsg(e)); }
+  renderGallery();
+}
+async function pickImagesDir() {
+  if (!TAURI.core) return;
+  let dir;
+  try {
+    dir = await invoke("plugin:dialog|open", {
+      options: { directory: true, multiple: false, title: "Choose where generated images are saved" },
+    });
+  } catch (e) { toast("Folder picker unavailable: " + emsg(e)); return; }
+  if (!dir) return; // cancelled
+  if (Array.isArray(dir)) dir = dir[0];
+  await switchImagesDir(dir);
+}
+
 async function renderGallery() {
   const box = $("#imgresult");
   if (!TAURI.core) return;
@@ -1200,6 +1230,15 @@ function wireImages() {
   $("#imggen").onclick = imgGenerate;
   $("#imgcancel").onclick = () => { if (IMG_ABORT) IMG_ABORT.abort(); };
   $("#imgprompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); imgGenerate(); } });
+  // keep the prompt box at the height the user dragged it to
+  const ip = $("#imgprompt");
+  const ih = parseInt(get("aipg_imgprompt_h") || "", 10);
+  if (ih >= 80 && ih <= 2000) ip.style.height = ih + "px";
+  ip.addEventListener("mouseup", () => { const h = ip.offsetHeight; if (h >= 80) set("aipg_imgprompt_h", String(h)); });
+  $("#btn-images-dir").onclick = pickImagesDir;
+  $("#btn-images-dir-reset").onclick = () => switchImagesDir("");
+  $("#btn-images-dir-open").onclick = async () => { try { await invoke("images_dir_open"); } catch (e) { toast(emsg(e)); } };
+  loadImagesDir();
   const sz = get("aipg_imgsize"); if (sz && [...$("#imgsize").options].some((o) => o.value === sz)) $("#imgsize").value = sz;
   $("#lightbox").onclick = () => { $("#lightbox").style.display = "none"; };
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#lightbox").style.display = "none"; });

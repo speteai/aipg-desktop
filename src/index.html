@@ -96,13 +96,13 @@
           </select>
         </label>
       </div>
-      <p class="hint">Generated on the grid with your API key (billable per image). Results are saved to a local gallery on this machine.</p>
+      <p class="hint">Generated on the grid with your API key (billable per image). Results are saved to a local gallery on this machine — choose the folder below.</p>
       <div class="field" style="max-width:none">
         <div id="imgsrcrow" class="row" style="display:none">
           <input type="file" id="imgfile" accept="image/*">
           <span id="imgsrcprev" class="srcprev"></span>
         </div>
-        <textarea id="imgprompt" rows="3" placeholder="Describe the image… (Ctrl+Enter to generate)"></textarea>
+        <textarea id="imgprompt" rows="6" placeholder="Describe the image… (Ctrl+Enter to generate)"></textarea>
         <div class="row" style="margin-top:8px">
           <button class="btn primary" id="imggen">Generate</button>
           <button class="btn ghost" id="imgcancel" style="display:none">Cancel</button>
@@ -113,6 +113,13 @@
       <div class="vh" style="margin-top:22px">
         <h2 class="sec" style="margin:0">Gallery</h2>
         <span id="imgcountlabel" class="muted"></span>
+      </div>
+      <div class="row imgdir">
+        <span class="k">Saved in</span>
+        <code id="images-dir" class="path">…</code>
+        <button class="btn ghost" id="btn-images-dir">Change…</button>
+        <button class="btn ghost" id="btn-images-dir-reset" style="display:none">Default</button>
+        <button class="btn ghost" id="btn-images-dir-open">Open folder</button>
       </div>
       <div id="imgresult" class="gallery"></div>
     </section>

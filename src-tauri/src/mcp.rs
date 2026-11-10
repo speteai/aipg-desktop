@@ -38,12 +38,24 @@ impl Ctx {
                     .to_string()
             })
     }
-    fn images_dir(&self) -> PathBuf {
+    fn data_dir(&self) -> PathBuf {
         self.key_file
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(std::env::temp_dir)
-            .join("images")
+    }
+    /// Holds the gallery index (and the image files unless the user chose
+    /// another folder in the app).
+    fn images_dir(&self) -> PathBuf {
+        self.data_dir().join("images")
+    }
+    fn image_files_dir(&self) -> PathBuf {
+        std::fs::read_to_string(self.data_dir().join("images_dir.txt"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.images_dir())
     }
 }
 
@@ -297,8 +309,9 @@ fn image_kind(b: &[u8]) -> (&'static str, &'static str) {
 }
 
 /// Save into the desktop app's gallery (same index format as `image_store`).
-fn store_image(dir: &Path, bytes: &[u8], mut entry: Value) -> Result<PathBuf, String> {
+fn store_image(dir: &Path, files: &Path, bytes: &[u8], mut entry: Value) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(files).map_err(|e| e.to_string())?;
     let index = dir.join("index.json");
     let mut list: Vec<Value> = std::fs::read_to_string(&index)
         .ok()
@@ -310,7 +323,7 @@ fn store_image(dir: &Path, bytes: &[u8], mut entry: Value) -> Result<PathBuf, St
         .unwrap_or(0);
     let id = format!("{ts}{}", list.len() % 1000);
     let file = format!("{id}.{}", image_kind(bytes).0);
-    let path = dir.join(&file);
+    let path = files.join(&file);
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
     entry["id"] = json!(id);
     entry["file"] = json!(file);
@@ -348,6 +361,7 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
     let d = post_json(ctx, "/images/generations", &body, 900).await?;
     let items = d["data"].as_array().cloned().unwrap_or_default();
     let dir = ctx.images_dir();
+    let files = ctx.image_files_dir();
     let mut content = Vec::new();
     let mut lines = Vec::new();
     let mut inlined = 0usize;
@@ -373,7 +387,7 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
             continue;
         }
         let meta = json!({ "prompt": prompt, "model": model, "size": size, "mode": "txt2img", "source": "connector" });
-        match store_image(&dir, &bytes, meta) {
+        match store_image(&dir, &files, &bytes, meta) {
             Ok(path) => lines.push(format!("Saved: {}", path.display())),
             Err(err) => lines.push(format!("Could not save the image locally: {err}")),
         }

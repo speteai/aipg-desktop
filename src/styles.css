@@ -456,7 +456,9 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 
 .imgresult{margin-top:var(--s5);display:flex;flex-direction:column;gap:var(--s3);align-items:flex-start}
 .imgresult img{display:block;max-width:100%;height:auto;border-radius:0;border:1px solid var(--bd)}
-#imgprompt{display:block}
+#imgprompt{display:block;width:100%;min-height:132px;max-height:70vh;resize:vertical}
+.imgdir{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);margin:var(--s3) 0 var(--s4)}
+.imgdir .path{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 
 /* 12 · Worker: step rail, progress, log =================================== */

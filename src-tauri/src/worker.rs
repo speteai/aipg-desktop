@@ -1094,6 +1094,20 @@ pub fn config_bool(app: &AppHandle, key: &str, default: bool) -> bool {
 fn images_dir(app: &AppHandle) -> PathBuf {
     data_dir(app).join("images")
 }
+/// File holding an optional user-chosen folder for the image files (one line,
+/// a path). The gallery index always stays in the app data folder.
+fn images_override_file(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("images_dir.txt")
+}
+fn image_files_dir(app: &AppHandle) -> PathBuf {
+    if let Ok(s) = std::fs::read_to_string(images_override_file(app)) {
+        let s = s.trim();
+        if !s.is_empty() {
+            return PathBuf::from(s);
+        }
+    }
+    images_dir(app)
+}
 fn images_index_path(app: &AppHandle) -> PathBuf {
     images_dir(app).join("index.json")
 }
@@ -1131,7 +1145,15 @@ fn image_file(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err("Invalid image entry.".into());
     }
-    Ok(images_dir(app).join(name))
+    let p = image_files_dir(app).join(name);
+    if !p.exists() {
+        // not moved along with a folder change — still in the default place
+        let d = images_dir(app).join(name);
+        if d.exists() {
+            return Ok(d);
+        }
+    }
+    Ok(p)
 }
 
 /// Persist a generated image (an https URL or a data: URL) into the local
@@ -1175,8 +1197,10 @@ pub async fn image_store(
     let mut list = images_load(&app);
     let id = format!("{ts}{}", list.len() % 1000);
     let file = format!("{id}.{ext}");
-    std::fs::create_dir_all(images_dir(&app)).map_err(e)?;
-    std::fs::write(images_dir(&app).join(&file), &bytes).map_err(e)?;
+    let dir = image_files_dir(&app);
+    std::fs::create_dir_all(&dir).map_err(|x| format!("Images folder cannot be used: {x}"))?;
+    std::fs::write(dir.join(&file), &bytes)
+        .map_err(|x| format!("Could not save into {}: {x}", dir.display()))?;
     let mut entry = if meta.is_object() { meta } else { serde_json::json!({}) };
     entry["id"] = serde_json::json!(id);
     entry["file"] = serde_json::json!(file);
@@ -1221,6 +1245,88 @@ pub fn image_remove(app: AppHandle, id: String) -> Result<(), String> {
 pub fn image_export(app: AppHandle, id: String, dest: String) -> Result<(), String> {
     std::fs::copy(image_file(&app, &id)?, PathBuf::from(dest))
         .map(|_| ())
+        .map_err(e)
+}
+
+#[derive(Serialize)]
+pub struct ImagesDir {
+    path: String,
+    custom: bool,
+    moved: usize,
+}
+
+#[tauri::command]
+pub fn images_dir_get(app: AppHandle) -> ImagesDir {
+    ImagesDir {
+        path: image_files_dir(&app).display().to_string(),
+        custom: images_override_file(&app).exists(),
+        moved: 0,
+    }
+}
+
+/// Choose where generated images are saved (empty string = default folder).
+/// The images already in the gallery are moved along; the index stays put.
+#[tauri::command]
+pub async fn images_dir_set(app: AppHandle, path: String) -> Result<ImagesDir, String> {
+    let p = path.trim().to_string();
+    let target = if p.is_empty() {
+        images_dir(&app)
+    } else {
+        PathBuf::from(&p)
+    };
+    std::fs::create_dir_all(&target).map_err(|x| format!("Folder cannot be used: {x}"))?;
+    let probe = target.join(".aipg-write-test");
+    std::fs::write(&probe, b"ok").map_err(|x| format!("No write access to the folder: {x}"))?;
+    let _ = std::fs::remove_file(&probe);
+
+    // move the gallery's own files only — never anything else in those folders
+    let sources: Vec<PathBuf> = images_load(&app)
+        .iter()
+        .filter_map(|x| x["id"].as_str().map(str::to_string))
+        .filter_map(|id| image_file(&app, &id).ok())
+        .filter(|f| f.exists() && f.parent() != Some(target.as_path()))
+        .collect();
+    let t = target.clone();
+    let moved = tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
+        let mut n = 0;
+        for src in sources {
+            let Some(name) = src.file_name() else { continue };
+            let dst = t.join(name);
+            if dst.exists() {
+                continue; // keep both; the gallery falls back to the old file
+            }
+            if std::fs::rename(&src, &dst).is_err() {
+                std::fs::copy(&src, &dst)?;
+                std::fs::remove_file(&src)?;
+            }
+            n += 1;
+        }
+        Ok(n)
+    })
+    .await
+    .map_err(e)?
+    .map_err(|x| format!("Moving images failed: {x}"))?;
+
+    let file = images_override_file(&app);
+    if p.is_empty() {
+        let _ = std::fs::remove_file(&file);
+    } else {
+        std::fs::create_dir_all(data_dir(&app)).map_err(e)?;
+        std::fs::write(&file, target.display().to_string()).map_err(e)?;
+    }
+    let mut d = images_dir_get(app);
+    d.moved = moved;
+    Ok(d)
+}
+
+/// Show the images folder in the system file manager.
+#[tauri::command]
+pub fn images_dir_open(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = image_files_dir(&app);
+    std::fs::create_dir_all(&dir).map_err(e)?;
+    app.opener()
+        .open_path(dir.display().to_string(), None::<&str>)
         .map_err(e)
 }
 
