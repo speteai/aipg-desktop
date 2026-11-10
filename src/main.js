@@ -1753,7 +1753,14 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#key").value = get(LS.key) || "";
   $("#ntfy").value = get(LS.ntfy) || "";
   $("#alerts").checked = get(LS.alerts) === "1";
-  $("#savekey").onclick = () => { set(LS.key, $("#key").value.trim()); toast("Key saved"); syncConnectorKey(); startPolling(); show("overview"); };
+  $("#savekey").onclick = async () => {
+    const k = $("#key").value.trim();
+    set(LS.key, k); syncConnectorKey(); startPolling(); show("overview");
+    if (!k) { toast("Key removed"); return; }
+    toast("Key saved — checking it…");
+    const res = await checkKey(k);
+    toast(res.ok === true ? "Key works" + (res.note ? " · " + res.note : "") : res.ok === false ? "Key saved, but: " + res.note : "Key saved. " + res.note);
+  };
   $("#clearkey").onclick = () => { del(LS.key); $("#key").value = ""; toast("Key forgotten"); syncConnectorKey(); startPolling(); loadOverview(); };
   $("#saventfy").onclick = () => { set(LS.ntfy, $("#ntfy").value.trim()); toast("ntfy topic saved"); };
   $("#alerts").onchange = (e) => {
@@ -1786,19 +1793,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (a) { e.preventDefault(); openExternal(a.dataset.ext); }
   });
 
-  // first-run onboarding
-  if (!apiKey() && get("aipg_onboarded") !== "1") {
-    $("#welcome").style.display = "";
-    setTimeout(() => $("#wc-key").focus(), 50);
-    $("#wc-save").onclick = () => {
-      const k = $("#wc-key").value.trim();
-      if (k) { set(LS.key, k); $("#key").value = k; }
-      set("aipg_onboarded", "1"); $("#welcome").style.display = "none"; startPolling();
-      show(k ? "overview" : "chat");
-    };
-    $("#wc-key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#wc-save").click(); });
-    $("#wc-skip").onclick = () => { set("aipg_onboarded", "1"); $("#welcome").style.display = "none"; };
-  }
+  // getting a key: shown on first run, and again from the Overview banner and Settings
+  wireKeyGuide();
+  if (!apiKey() && get("aipg_onboarded") !== "1") openKeyGuide();
 
   show("overview");
   startPolling();
@@ -1847,6 +1844,59 @@ function wireQuick() {
   // files dropped outside the chat must not replace the app with the file
   window.addEventListener("dragover", (e) => e.preventDefault());
   window.addEventListener("drop", (e) => e.preventDefault());
+}
+
+/* ---------- getting an API key: guided, with a live check ---------- */
+// Ask the grid whether a key works. ok: true = accepted, false = rejected,
+// null = could not be checked (offline, grid down).
+async function checkKey(k) {
+  try {
+    const r = await fetch(API + "/account/credits", { headers: { "Accept": "application/json", "Authorization": "Bearer " + k } });
+    if (r.ok) {
+      let c = {}; try { c = await r.json(); } catch (e) {}
+      return { ok: true, note: c.total_spendable_usd != null ? `spendable now: ${money(c.total_spendable_usd)}` : "" };
+    }
+    if (r.status === 401 || r.status === 403) {
+      let d = ""; try { d = (await r.json()).detail || ""; } catch (e) {}
+      return { ok: false, note: r.status === 401
+        ? "The grid does not know this key. Copy it again from the Console, or create a new one there."
+        : "The grid knows this key but it may not read the account" + (d ? ` (${d})` : "") + ". Create a key that is allowed to read the account and submit inference." };
+    }
+    return { ok: null, note: `The grid answered HTTP ${r.status}; the key could not be checked.` };
+  } catch (e) { return { ok: null, note: "The grid could not be reached, so the key could not be checked." }; }
+}
+function keyGuideMsg(text, cls) { const m = $("#wc-msg"); m.textContent = text; m.className = "hint" + (cls ? " " + cls : ""); }
+function openKeyGuide() {
+  $("#wc-key").value = "";
+  keyGuideMsg("The key is stored on this computer only and sent only to api.aipowergrid.io.");
+  $("#wc-save").textContent = "Check & save"; $("#wc-save").disabled = false;
+  $("#welcome").style.display = "";
+  setTimeout(() => $("#wc-key").focus(), 50);
+}
+function closeKeyGuide() { set("aipg_onboarded", "1"); $("#welcome").style.display = "none"; }
+function wireKeyGuide() {
+  let unchecked = ""; // a key the grid could not check: a second click saves it anyway
+  $("#wc-save").onclick = async () => {
+    const k = $("#wc-key").value.trim();
+    if (!k) { keyGuideMsg("Paste your key first — or choose “Not now”.", "bad"); return; }
+    if (!/^grid_/.test(k)) { keyGuideMsg("That does not look like a Grid key: it should start with grid_.", "bad"); return; }
+    const save = (msg) => {
+      set(LS.key, k); $("#key").value = k; closeKeyGuide(); syncConnectorKey(); startPolling(); show("overview"); toast(msg);
+    };
+    if (unchecked === k) return save("Key saved (not checked)");
+    $("#wc-save").disabled = true; keyGuideMsg("Checking the key with the grid…");
+    const res = await checkKey(k);
+    $("#wc-save").disabled = false;
+    if (res.ok === true) return save("Key works" + (res.note ? " · " + res.note : ""));
+    if (res.ok === false) { keyGuideMsg(res.note, "bad"); return; }
+    unchecked = k; $("#wc-save").textContent = "Save anyway";
+    keyGuideMsg(res.note + " Click “Save anyway” to keep it, or try again later.", "bad");
+  };
+  $("#wc-key").addEventListener("input", () => { unchecked = ""; $("#wc-save").textContent = "Check & save"; });
+  $("#wc-key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#wc-save").click(); });
+  $("#wc-skip").onclick = closeKeyGuide;
+  $("#needkey-go").onclick = openKeyGuide;
+  $("#key-help").onclick = (e) => { e.preventDefault(); openKeyGuide(); };
 }
 
 /* ---------- self-update (signed releases from GitHub) ---------- */

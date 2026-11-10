@@ -532,6 +532,12 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .welcomecard{width:100%;max-width:460px;
   background:var(--panel);border:1px solid var(--bd-strong);border-top:3px solid var(--acc-fill);
   border-radius:0;padding:var(--s5) var(--s5) var(--s4)}
+.wcsteps{margin:var(--s3) 0 var(--s2);padding-left:1.3em;display:flex;flex-direction:column;gap:var(--s3);
+  font-size:var(--t-small);line-height:1.5}
+.wcsteps .row{display:flex;margin-top:var(--s2)}
+.wcsteps input{flex:1;min-width:0}
+#wc-msg.bad{color:var(--warn,#e0a030)}
+#wc-msg.good{color:var(--ok)}
 .welcomecard .brand{font-size:var(--t-lead);letter-spacing:0;font-weight:600}
 
 

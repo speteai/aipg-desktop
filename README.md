@@ -86,6 +86,13 @@ running a worker is optional.
   in one click. Updates are signature-verified against a key baked into the app.
   (On Linux this works for the AppImage; `.deb`/`.rpm` users update via a new package.)
 
+## Getting an API key
+
+On first start the app walks you through it: open the
+[AIPG Console key page](https://console.aipowergrid.io/dashboard/api-key), sign in or create an account, create a key, paste it.
+The app checks the key with the grid before saving it. Without a key you can still browse
+the network and the model list and chat with a model on your own computer.
+
 ## Security & privacy
 
 - Your API key is stored **locally** and sent only to `api.aipowergrid.io`.
