@@ -301,6 +301,14 @@
         </div>
         <div id="cn-clients" style="display:none">
           <div class="field" style="max-width:none">
+            <label>Daily spending limit for assistants</label>
+            <div class="row">
+              <input id="cn-limit" type="text" inputmode="decimal" placeholder="e.g. 0.50 (USD per day, empty = no limit)" autocomplete="off" spellcheck="false">
+              <button class="btn" id="cn-limit-save">Save</button>
+            </div>
+            <p class="hint" id="cn-spent"></p>
+          </div>
+          <div class="field" style="max-width:none">
             <label>Claude Desktop</label>
             <div class="row">
               <button class="btn" id="cn-claude-add">Add to Claude Desktop</button>

@@ -67,6 +67,10 @@ running a worker is optional.
   images, list models, check your credit. One click registers it with Claude Desktop.
   It runs on your machine (`aipg-desktop --mcp`), so hosted clients such as ChatGPT or
   claude.ai in the browser cannot use it.
+  Results state the estimated cost and your remaining credit; a quote tool estimates a
+  cost beforehand, a worker-status tool reports your workers and recent log errors, and
+  you can set a **daily spending limit** for assistants. Tool descriptions warn that
+  prompts are processed in plain text on third-party machines.
 - **Offline alerts** — native notifications when a worker goes offline, enters
   maintenance, or recovers (while the app is open), optionally also pushed to your phone
   via an [ntfy](https://ntfy.sh) topic.

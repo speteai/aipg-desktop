@@ -77,6 +77,11 @@ pub struct ConnectorStatus {
     claude_found: bool,
     claude_registered: bool,
     claude_config: String,
+    /// Daily spending limit for assistants in USD; 0 = none.
+    daily_limit_usd: f64,
+    /// Estimated spend and number of paid requests through the connector today (UTC).
+    spent_today_usd: f64,
+    requests_today: u64,
     /// One-line command for Claude Code.
     command: String,
     /// Generic `mcpServers` snippet for other MCP clients.
@@ -92,7 +97,11 @@ pub fn connector_status(app: AppHandle) -> Result<ConnectorStatus, String> {
         .map(|c| c["mcpServers"][SERVER].is_object())
         .unwrap_or(false);
     let entry = json!({ "command": launcher, "args": ["--mcp", key] });
+    let (spent, requests) = crate::mcp::spend_today(&crate::worker::data_dir(&app));
     Ok(ConnectorStatus {
+        daily_limit_usd: read_key_file(&app)["daily_limit_usd"].as_f64().unwrap_or(0.0),
+        spent_today_usd: spent,
+        requests_today: requests,
         enabled: key_file(&app).exists(),
         claude_found: cfg_path.parent().map(|d| d.exists()).unwrap_or(false),
         claude_registered: registered,
@@ -105,6 +114,29 @@ pub fn connector_status(app: AppHandle) -> Result<ConnectorStatus, String> {
     })
 }
 
+fn read_key_file(app: &AppHandle) -> Value {
+    std::fs::read_to_string(key_file(app))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+/// Set the daily spending limit for requests made through the connector
+/// (0 removes it). Only possible while the connector is enabled.
+#[tauri::command]
+pub fn connector_limit_set(app: AppHandle, usd: f64) -> Result<(), String> {
+    if !key_file(&app).exists() {
+        return Err("Enable the connector first.".into());
+    }
+    if !usd.is_finite() || usd < 0.0 {
+        return Err("Enter an amount of 0 or more.".into());
+    }
+    let mut cfg = read_key_file(&app);
+    cfg["daily_limit_usd"] = json!(usd);
+    write_key_file(&app, &cfg)
+}
+
 /// Store the API key for the connector process (owner-readable only on Unix).
 #[tauri::command]
 pub fn connector_enable(app: AppHandle, api_key: String) -> Result<(), String> {
@@ -112,8 +144,15 @@ pub fn connector_enable(app: AppHandle, api_key: String) -> Result<(), String> {
     if api_key.is_empty() {
         return Err("Save your API key in Settings first.".into());
     }
-    let path = key_file(&app);
-    std::fs::create_dir_all(crate::worker::data_dir(&app)).map_err(e)?;
+    // keep other settings (the daily limit) when the key is refreshed
+    let mut cfg = read_key_file(&app);
+    cfg["api_key"] = json!(api_key);
+    write_key_file(&app, &cfg)
+}
+
+fn write_key_file(app: &AppHandle, cfg: &Value) -> Result<(), String> {
+    let path = key_file(app);
+    std::fs::create_dir_all(crate::worker::data_dir(app)).map_err(e)?;
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -125,11 +164,10 @@ pub fn connector_enable(app: AppHandle, api_key: String) -> Result<(), String> {
             .mode(0o600)
             .open(&path)
             .map_err(e)?;
-        f.write_all(json!({ "api_key": api_key }).to_string().as_bytes())
-            .map_err(e)?;
+        f.write_all(cfg.to_string().as_bytes()).map_err(e)?;
     }
     #[cfg(not(unix))]
-    std::fs::write(&path, json!({ "api_key": api_key }).to_string()).map_err(e)?;
+    std::fs::write(&path, cfg.to_string()).map_err(e)?;
     Ok(())
 }
 

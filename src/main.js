@@ -1624,6 +1624,12 @@ function renderConnect(st) {
     : st.claude_found ? "Claude Desktop found on this computer."
     : "Claude Desktop was not found here; the entry is written anyway and used once it is installed.";
   $("#cn-claude-path").textContent = st.claude_config;
+  if (document.activeElement !== $("#cn-limit")) $("#cn-limit").value = st.daily_limit_usd ? String(st.daily_limit_usd) : "";
+  const fm = (x) => "$" + (x && x < 0.01 ? x.toFixed(6) : (x || 0).toFixed(4));
+  $("#cn-spent").textContent =
+    `Today (UTC): ${st.requests_today} paid request${st.requests_today === 1 ? "" : "s"} through the connector, about ${fm(st.spent_today_usd)}` +
+    (st.daily_limit_usd ? ` of ${fm(st.daily_limit_usd)}.` : ". No limit set.") +
+    " A request is refused before it is sent if its worst case would exceed the limit. Amounts are estimates from list prices.";
   $("#cn-command").textContent = st.command;
   $("#cn-snippet").textContent = st.snippet;
 }
@@ -1643,6 +1649,14 @@ async function loadConnect() {
       if (!(await askConfirm("Turn the connector off? Its stored key and the Claude Desktop entry are removed.", "Disable connector", false))) return;
       run("connector_disable", {}, "Connector disabled");
     };
+    const saveLimit = () => {
+      const raw = $("#cn-limit").value.trim().replace(",", ".").replace(/^\$/, "");
+      const usd = raw === "" ? 0 : Number(raw);
+      if (!isFinite(usd) || usd < 0) { toast("Enter an amount like 0.50, or leave it empty"); return; }
+      run("connector_limit_set", { usd }, usd ? "Daily limit saved" : "Daily limit removed");
+    };
+    $("#cn-limit-save").onclick = saveLimit;
+    $("#cn-limit").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("#cn-limit").blur(); saveLimit(); } });
     $("#cn-claude-add").onclick = () => run("connector_claude_add", {}, "Added. Restart Claude Desktop.");
     $("#cn-claude-remove").onclick = () => run("connector_claude_remove", {}, "Removed from Claude Desktop");
     $("#cn-copy-command").onclick = () => copyText($("#cn-command").textContent, "Command copied");

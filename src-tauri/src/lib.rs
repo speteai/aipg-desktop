@@ -136,6 +136,7 @@ pub fn run() {
             connector::connector_status,
             connector::connector_enable,
             connector::connector_disable,
+            connector::connector_limit_set,
             connector::connector_claude_add,
             connector::connector_claude_remove,
         ])

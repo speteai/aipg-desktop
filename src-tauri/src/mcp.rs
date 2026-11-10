@@ -38,6 +38,32 @@ impl Ctx {
                     .to_string()
             })
     }
+    /// Daily spending limit for requests made through the connector (USD).
+    fn daily_limit(&self) -> Option<f64> {
+        std::fs::read_to_string(&self.key_file)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .and_then(|v| v["daily_limit_usd"].as_f64())
+            .filter(|x| *x > 0.0)
+    }
+    /// Refuse a request whose worst case would exceed today's limit.
+    fn check_limit(&self, worst_case: f64) -> Result<(), String> {
+        let Some(limit) = self.daily_limit() else { return Ok(()) };
+        let (spent, _) = spend_today(&self.data_dir());
+        if spent + worst_case > limit {
+            return Err(format!(
+                "Not sent: the daily spending limit for assistants is {} and {} is already used today; this request could cost up to {}. The limit resets at UTC midnight. Do not retry — the user can raise it in AIPG Desktop → Connect.",
+                money(limit), money(spent), money(worst_case)
+            ));
+        }
+        Ok(())
+    }
+    fn add_spend(&self, usd: f64) {
+        let dir = self.data_dir();
+        let (spent, requests) = spend_today(&dir);
+        let v = json!({ "day": utc_day(), "usd": spent + usd.max(0.0), "requests": requests + 1 });
+        let _ = std::fs::write(dir.join(SPEND_FILE), v.to_string());
+    }
     fn data_dir(&self) -> PathBuf {
         self.key_file
             .parent()
@@ -57,6 +83,170 @@ impl Ctx {
             .map(PathBuf::from)
             .unwrap_or_else(|| self.images_dir())
     }
+}
+
+const SPEND_FILE: &str = "connector_spend.json";
+
+fn utc_day() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / 86_400)
+        .unwrap_or(0)
+}
+
+/// What the connector spent today (UTC), estimated from list prices, and how
+/// many paid requests it made. Kept in the app data folder.
+pub fn spend_today(data_dir: &Path) -> (f64, u64) {
+    std::fs::read_to_string(data_dir.join(SPEND_FILE))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .filter(|v| v["day"].as_u64() == Some(utc_day()))
+        .map(|v| (v["usd"].as_f64().unwrap_or(0.0), v["requests"].as_u64().unwrap_or(0)))
+        .unwrap_or((0.0, 0))
+}
+
+/// Small amounts need more digits than a balance does.
+fn money(x: f64) -> String {
+    if x != 0.0 && x.abs() < 0.01 {
+        format!("${x:.6}")
+    } else {
+        format!("${x:.4}")
+    }
+}
+
+/// Model names compare case-insensitively and without the `grid/` prefix.
+fn norm(name: &str) -> String {
+    let n = name.trim().to_lowercase();
+    n.strip_prefix("grid/").map(str::to_string).unwrap_or(n)
+}
+
+/// Find the online model the caller meant. `kind` is "text" or "image".
+fn resolve_model(models: &[Value], want: &str, kind: &str) -> Result<String, String> {
+    let online: Vec<&str> = models
+        .iter()
+        .filter(|m| m["type"] == kind)
+        .filter_map(|m| m["name"].as_str())
+        .collect();
+    if online.is_empty() {
+        // status unavailable: let the grid decide
+        return Ok(want.to_string());
+    }
+    if let Some(m) = online.iter().find(|m| **m == want) {
+        return Ok(m.to_string());
+    }
+    let w = norm(want);
+    if let Some(m) = online.iter().find(|m| norm(m) == w) {
+        return Ok(m.to_string());
+    }
+    let close: Vec<&&str> = online
+        .iter()
+        .filter(|m| {
+            let n = norm(m);
+            n.contains(&w) || w.contains(&n)
+        })
+        .collect();
+    if close.len() == 1 {
+        return Ok(close[0].to_string());
+    }
+    Err(format!(
+        "No {kind} model matching \"{want}\" is online on the grid. Nothing was sent or billed. Online {kind} models: {}.{}",
+        online.join(", "),
+        if kind == "text" { " \"auto\" lets the grid choose." } else { "" }
+    ))
+}
+
+async fn status_models(ctx: &Ctx) -> Vec<Value> {
+    get_json(ctx, "/status/models", false)
+        .await
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+}
+
+/// Published price book: (rates per model, aliases).
+async fn price_book(ctx: &Ctx) -> Value {
+    get_json(ctx, "/pricing", false)
+        .await
+        .map(|v| v["price_book"].clone())
+        .unwrap_or(Value::Null)
+}
+
+fn book_rates<'a>(book: &'a Value, name: &str) -> Option<&'a Value> {
+    let n = name.trim().to_lowercase();
+    let n = book["aliases"][&n].as_str().map(str::to_string).unwrap_or(n);
+    book["models"]
+        .as_array()?
+        .iter()
+        .find(|m| m["model"].as_str().map(str::to_lowercase).as_deref() == Some(n.as_str()))
+        .map(|m| &m["rates"])
+}
+
+/// (input, output) USD per million tokens of an online text model.
+fn text_rates(models: &[Value], name: &str) -> Option<(f64, f64)> {
+    let n = norm(name);
+    let p = &models.iter().find(|m| m["name"].as_str().map(norm).as_deref() == Some(n.as_str()))?["pricing"];
+    Some((p["input_per_mtok_usd"].as_f64()?, p["output_per_mtok_usd"].as_f64()?))
+}
+
+/// The most expensive online text model: the worst case for "auto".
+fn worst_text_rates(models: &[Value]) -> Option<(f64, f64)> {
+    models
+        .iter()
+        .filter(|m| m["type"] == "text")
+        .filter_map(|m| text_rates(models, m["name"].as_str()?))
+        .fold(None, |acc: Option<(f64, f64)>, (i, o)| match acc {
+            Some((ai, ao)) => Some((ai.max(i), ao.max(o))),
+            None => Some((i, o)),
+        })
+}
+
+/// Rough token count of a prompt (about 3 characters per token, on the safe side).
+fn approx_tokens(s: &str) -> u64 {
+    (s.chars().count() as u64).div_ceil(3)
+}
+
+fn text_cost(rates: (f64, f64), input: u64, output: u64) -> f64 {
+    (input as f64 * rates.0 + output as f64 * rates.1) / 1_000_000.0
+}
+
+/// One line with what the account can still spend; empty when unavailable.
+async fn credit_line(ctx: &Ctx) -> String {
+    match get_json(ctx, "/account/credits", true).await {
+        Ok(c) => {
+            let num = |v: &Value| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()));
+            let mut s = match num(&c["total_spendable_usd"]) {
+                Some(x) => format!("Spendable now: {}", money(x)),
+                None => return String::new(),
+            };
+            if let (Some(r), Some(cap)) = (num(&c["free"]["remaining_usd"]), num(&c["free"]["daily_cap_usd"])) {
+                s.push_str(&format!(" (free today: {} of {})", money(r), money(cap)));
+            }
+            s
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// Which worker served a finished request, if the public job feed shows it.
+async fn served_by(ctx: &Ctx, response_id: &str) -> String {
+    let id = response_id.trim_start_matches("chatcmpl-");
+    if id.len() < 8 {
+        return String::new();
+    }
+    let Ok(feed) = get_json(ctx, "/jobs/recent?limit=50", false).await else { return String::new() };
+    let Some(job) = feed["jobs"].as_array().and_then(|a| {
+        a.iter().find(|j| j["job_id"].as_str().map(|x| x == id || x.starts_with(id) || id.starts_with(x)).unwrap_or(false))
+    }) else {
+        return String::new();
+    };
+    let Some(worker) = job["worker"].as_str() else { return String::new() };
+    let own = get_json(ctx, "/account/workers", true)
+        .await
+        .ok()
+        .and_then(|w| w["workers"].as_array().cloned())
+        .map(|a| a.iter().any(|x| x["name"].as_str() == Some(worker)))
+        .unwrap_or(false);
+    format!(" · served by worker {worker}{}", if own { " (the user's own worker)" } else { "" })
 }
 
 /// Entry point for `--mcp`. Blocks until stdin closes.
@@ -124,7 +314,7 @@ async fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 "protocolVersion": version,
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "aipg-grid", "title": "AI Power Grid", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Tools that run work on AI Power Grid, a decentralised GPU network, using the user's own grid account. Every generation is billed to that account (a daily free allowance may apply), so use them when the user asks to offload work to the grid or wants an image."
+                "instructions": "Tools that run work on AI Power Grid, a decentralised GPU network, using the user's own grid account. Every generation is billed to that account (a daily free allowance may apply), so use them when the user asks to offload work to the grid or wants an image. Privacy: prompts are processed in plain text on computers run by independent third-party operators, not by a single vetted provider. Do not send confidential, personal or business-sensitive content without asking the user first. Results state the estimated cost and the remaining credit; grid_quote estimates a cost in advance."
             })
         }
         "ping" => json!({}),
@@ -137,6 +327,8 @@ async fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 "grid_generate_image" => grid_generate_image(ctx, &args).await,
                 "grid_models" => grid_models(ctx).await,
                 "grid_balance" => grid_balance(ctx).await,
+                "grid_quote" => grid_quote(ctx, &args).await,
+                "grid_worker_status" => grid_worker_status(ctx).await,
                 _ => return Some(rpc_error(id, -32602, "Unknown tool")),
             };
             match outcome {
@@ -156,13 +348,14 @@ fn tools() -> Value {
         {
             "name": "grid_chat",
             "title": "Run a text task on the grid",
-            "description": "Send a prompt to a text model on AI Power Grid and return its answer. Use it to offload self-contained work (summaries, translations, drafts, classification, bulk rewriting) to the grid. Billed to the user's grid account. Include everything the model needs in the prompt: it does not see this conversation.",
+            "description": "Send a prompt to a text model on AI Power Grid and return its answer. Use it to offload self-contained work (summaries, translations, drafts, classification, bulk rewriting) to the grid. Billed to the user's grid account; the result states the estimated cost and the remaining credit. PRIVACY: the prompt is processed in plain text on a computer run by an independent third-party operator. Do not send confidential, personal or business-sensitive content without asking the user first. Include everything the model needs in the prompt: it does not see this conversation.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "prompt": { "type": "string", "description": "The complete task, including any text to work on." },
                     "system": { "type": "string", "description": "Optional system instruction." },
-                    "model": { "type": "string", "description": "Grid text model id from grid_models. Default \"auto\" lets the grid route the request." },
+                    "model": { "type": "string", "description": "Grid text model from grid_models; the name is matched leniently (case, optional grid/ prefix). Default \"auto\" lets the grid route the request." },
+                    "reasoning": { "type": "string", "enum": ["off", "low", "medium", "high"], "description": "Ask the model to think less or more before answering. \"off\" avoids paying for hidden reasoning tokens on simple tasks. Best effort: not every backend honours it." },
                     "max_tokens": { "type": "integer", "minimum": 1, "maximum": 32000, "description": "Upper bound for the answer length. Default 2048." },
                     "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
                 },
@@ -172,12 +365,12 @@ fn tools() -> Value {
         {
             "name": "grid_generate_image",
             "title": "Generate images on the grid",
-            "description": "Generate 1-4 images from a text prompt on AI Power Grid. Each image is billed to the user's grid account. Images are saved to the AIPG Desktop gallery on this computer; the result lists the file paths and includes the image itself when it is small enough.",
+            "description": "Generate 1-4 images from a text prompt on AI Power Grid. Each image is billed to the user's grid account; the result states the estimated cost and the remaining credit. PRIVACY: the prompt is processed in plain text on a computer run by an independent third-party operator. Images are saved to the AIPG Desktop gallery on this computer; the result lists the file paths and includes the image itself when it is small enough.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "prompt": { "type": "string", "description": "What the image should show." },
-                    "model": { "type": "string", "description": "Grid image model id from grid_models. Default: an online image model." },
+                    "model": { "type": "string", "description": "Grid image model from grid_models (matched leniently). Default: an online image model." },
                     "size": { "type": "string", "enum": SIZES, "description": "Width x height. Default 1024x1024." },
                     "n": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Number of images. Default 1." }
                 },
@@ -187,7 +380,7 @@ fn tools() -> Value {
         {
             "name": "grid_models",
             "title": "List grid models",
-            "description": "List the models that are online on AI Power Grid right now, with type (text or image), number of workers, typical speed and price. Free to call.",
+            "description": "List the models that are online on AI Power Grid right now, with type (text or image), number of workers, typical speed and price (per million tokens for text, per image for image models). Free to call.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true }
         },
@@ -195,6 +388,31 @@ fn tools() -> Value {
             "name": "grid_balance",
             "title": "Show grid credit",
             "description": "Show what the user's grid account can spend: today's free allowance, promotional credit and purchased balance. Free to call.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": { "readOnlyHint": true }
+        },
+        {
+            "name": "grid_quote",
+            "title": "Estimate the cost of a grid request",
+            "description": "Estimate what a text or image request would cost before sending it, from the grid's own quote endpoint and the published prices. Nothing is generated or billed. Free to call.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "model": { "type": "string", "description": "Model name from grid_models (matched leniently)." },
+                    "modality": { "type": "string", "enum": ["text", "image"], "description": "Default text." },
+                    "prompt": { "type": "string", "description": "Text requests: the prompt, used to estimate input tokens." },
+                    "prompt_tokens": { "type": "integer", "minimum": 0, "description": "Text requests: input tokens, if known (overrides prompt)." },
+                    "max_tokens": { "type": "integer", "minimum": 1, "maximum": 32000, "description": "Text requests: upper bound for the answer. Default 2048." },
+                    "n": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Image requests: number of images. Default 1." }
+                },
+                "required": ["model"]
+            },
+            "annotations": { "readOnlyHint": true }
+        },
+        {
+            "name": "grid_worker_status",
+            "title": "Status of the user's grid workers",
+            "description": "Show the user's own grid workers: online or offline, models and context size, completed jobs, den earned, recent jobs, and the latest lines and errors from the worker log of AIPG Desktop on this computer. Free to call.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true }
         }
@@ -271,10 +489,28 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     if prompt.is_empty() {
         return Err("`prompt` is required.".into());
     }
-    let model = args["model"].as_str().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("auto");
+    ctx.api_key()?; // fail before any lookup
+    let wanted = args["model"].as_str().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("auto");
     let max_tokens = args["max_tokens"].as_u64().unwrap_or(2048).clamp(1, 32000);
+    let system = args["system"].as_str().map(str::trim).filter(|s| !s.is_empty());
+
+    let models = status_models(ctx).await;
+    let model = if wanted.eq_ignore_ascii_case("auto") {
+        "auto".to_string()
+    } else {
+        resolve_model(&models, wanted, "text")?
+    };
+    // worst case for the spending limit: full answer length at this model's price
+    let input_est = approx_tokens(prompt) + system.map(approx_tokens).unwrap_or(0);
+    let before = if model == "auto" { worst_text_rates(&models) } else { text_rates(&models, &model) };
+    if let Some(r) = before {
+        ctx.check_limit(text_cost(r, input_est, max_tokens))?;
+    } else {
+        ctx.check_limit(0.0)?;
+    }
+
     let mut messages = Vec::new();
-    if let Some(sys) = args["system"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(sys) = system {
         messages.push(json!({ "role": "system", "content": sys }));
     }
     messages.push(json!({ "role": "user", "content": prompt }));
@@ -282,19 +518,202 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     if let Some(t) = args["temperature"].as_f64() {
         body["temperature"] = json!(t.clamp(0.0, 2.0));
     }
-    let d = post_json(ctx, "/chat/completions", &body, 600).await?;
-    let msg = &d["choices"][0]["message"];
-    let answer = msg["content"].as_str().map(str::trim).unwrap_or("");
-    if answer.is_empty() {
-        return Err("The grid model returned an empty answer (the token limit may have been used up by its reasoning). Try a larger max_tokens or another model.".into());
-    }
-    let used = d["model"].as_str().unwrap_or(model);
-    let usage = &d["usage"];
-    let note = match (usage["prompt_tokens"].as_u64(), usage["completion_tokens"].as_u64()) {
-        (Some(i), Some(o)) => format!("[AI Power Grid · model {used} · {i} input + {o} output tokens]"),
-        _ => format!("[AI Power Grid · model {used}]"),
+    let reasoning = args["reasoning"].as_str().map(str::trim).filter(|s| ["off", "low", "medium", "high"].contains(s));
+    let mut reasoning_note = "";
+    let d = match reasoning {
+        Some(level) => {
+            let mut with = body.clone();
+            if level == "off" {
+                with["chat_template_kwargs"] = json!({ "enable_thinking": false });
+                with["reasoning_effort"] = json!("low");
+            } else {
+                with["reasoning_effort"] = json!(level);
+            }
+            match post_json(ctx, "/chat/completions", &with, 600).await {
+                Ok(d) => d,
+                // a backend that rejects the option outright: send it plain
+                Err(err) if err.contains("(HTTP 400)") || err.contains("(HTTP 422)") => {
+                    reasoning_note = " · the reasoning option was rejected and left out";
+                    post_json(ctx, "/chat/completions", &body, 600).await?
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        None => post_json(ctx, "/chat/completions", &body, 600).await?,
     };
-    Ok(vec![text(answer), text(note)])
+
+    let choice = &d["choices"][0];
+    let msg = &choice["message"];
+    let answer = msg["content"].as_str().map(str::trim).unwrap_or("");
+    let used = d["model"].as_str().unwrap_or(&model).to_string();
+    let usage = &d["usage"];
+    let tokens = (usage["prompt_tokens"].as_u64(), usage["completion_tokens"].as_u64());
+    let rates = text_rates(&models, &used).or(before);
+    let mut note = format!("AI Power Grid · model {used}");
+    let mut cost = None;
+    if let (Some(i), Some(o)) = tokens {
+        note.push_str(&format!(" · {i} input + {o} output tokens"));
+        if let Some(r) = usage["completion_tokens_details"]["reasoning_tokens"].as_u64() {
+            note.push_str(&format!(" ({r} of them reasoning)"));
+        }
+        if let Some(r) = rates {
+            let c = text_cost(r, i, o);
+            cost = Some(c);
+            note.push_str(&format!(" · cost about {} (list price)", money(c)));
+        }
+    }
+    ctx.add_spend(cost.unwrap_or(0.0));
+    note.push_str(reasoning_note);
+    if let Some(id) = d["id"].as_str() {
+        note.push_str(&served_by(ctx, id).await);
+    }
+    let credit = credit_line(ctx).await;
+    if !credit.is_empty() {
+        note.push_str(" · ");
+        note.push_str(&credit);
+    }
+    if answer.is_empty() {
+        let finish = choice["finish_reason"].as_str().unwrap_or("unknown");
+        let thought = msg["reasoning_content"].as_str().or_else(|| msg["reasoning"].as_str()).map(str::len).unwrap_or(0);
+        return Err(format!(
+            "The grid model returned no visible answer (finish reason: {finish}{}). The request was still billed. [{note}] Do not simply retry: set reasoning to \"off\", raise max_tokens, or pick another model.",
+            if thought > 0 { format!(", {thought} characters of hidden reasoning") } else { String::new() }
+        ));
+    }
+    Ok(vec![text(answer), text(format!("[{note}]"))])
+}
+
+/// Pre-dispatch estimate: the grid's own quote plus the list-price arithmetic.
+async fn grid_quote(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
+    let wanted = args["model"].as_str().map(str::trim).unwrap_or("");
+    if wanted.is_empty() {
+        return Err("`model` is required.".into());
+    }
+    let modality = if args["modality"] == "image" { "image" } else { "text" };
+    let models = status_models(ctx).await;
+    let model = if wanted.eq_ignore_ascii_case("auto") { "auto".to_string() } else { resolve_model(&models, wanted, modality)? };
+    let mut lines = Vec::new();
+    let mut form = json!({ "model": model, "modality": modality });
+    if modality == "text" {
+        let input = args["prompt_tokens"].as_u64().unwrap_or_else(|| args["prompt"].as_str().map(approx_tokens).unwrap_or(0));
+        let max_tokens = args["max_tokens"].as_u64().unwrap_or(2048).clamp(1, 32000);
+        form["prompt_tokens"] = json!(input);
+        form["max_tokens"] = json!(max_tokens);
+        let rates = if model == "auto" { worst_text_rates(&models) } else { text_rates(&models, &model) };
+        match rates {
+            Some(r) => lines.push(format!(
+                "List price for {model}{}: ${} input / ${} output per million tokens. About {input} input tokens + up to {max_tokens} output tokens = at most {}.",
+                if model == "auto" { " (worst case: the most expensive online model)" } else { "" },
+                r.0, r.1, money(text_cost(r, input, max_tokens))
+            )),
+            None => lines.push(format!("No list price is published for {model}.")),
+        }
+    } else {
+        let n = args["n"].as_u64().unwrap_or(1).clamp(1, 4);
+        form["n"] = json!(n);
+        let book = price_book(ctx).await;
+        match book_rates(&book, &model).and_then(|r| r["per_image_usd"].as_f64()) {
+            Some(p) => lines.push(format!("List price for {model}: {} per image, so {} for {n}.", money(p), money(p * n as f64))),
+            None => lines.push(format!("No list price is published for {model}.")),
+        }
+    }
+    match post_json(ctx, "/account/credits/quote", &form, 30).await {
+        Ok(q) => lines.push(format!("Grid quote: {q}")),
+        Err(err) => lines.push(format!("The grid's quote endpoint did not answer: {err}")),
+    }
+    if let Some(limit) = ctx.daily_limit() {
+        let (spent, _) = spend_today(&ctx.data_dir());
+        lines.push(format!("Daily limit for assistants: {} used of {}.", money(spent), money(limit)));
+    }
+    lines.push("Nothing was generated or billed.".into());
+    Ok(vec![text(lines.join("\n"))])
+}
+
+/// The user's workers as the grid sees them, plus the local worker log.
+async fn grid_worker_status(ctx: &Ctx) -> Result<Vec<Value>, String> {
+    let models = status_models(ctx).await;
+    let mut lines = Vec::new();
+    let workers = match get_json(ctx, "/account/workers", true).await {
+        Ok(w) => w["workers"].as_array().cloned().unwrap_or_default(),
+        Err(err) => {
+            lines.push(format!("The grid did not return the worker list: {err}"));
+            Vec::new()
+        }
+    };
+    if workers.is_empty() && lines.is_empty() {
+        lines.push("No workers are registered to this grid account.".to_string());
+    }
+    for x in &workers {
+        let name = x["name"].as_str().unwrap_or("?");
+        let mut parts = vec![format!("{name}: {}", if x["online"] == true { "ONLINE" } else { "offline" })];
+        if let Some(obj) = x.as_object() {
+            for (k, v) in obj {
+                if k == "name" || k == "online" || k == "id" {
+                    continue;
+                }
+                match v {
+                    Value::Null => {}
+                    Value::String(s) if !s.is_empty() => parts.push(format!("{k} {s}")),
+                    Value::Number(n) => parts.push(format!("{k} {n}")),
+                    Value::Bool(b) => parts.push(format!("{k} {b}")),
+                    Value::Array(a) if !a.is_empty() => parts.push(format!(
+                        "{k} {}",
+                        a.iter().map(|i| i.as_str().map(str::to_string).unwrap_or_else(|| i.to_string())).collect::<Vec<_>>().join(", ")
+                    )),
+                    _ => {}
+                }
+            }
+        }
+        for m in x["models"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let Some(mn) = m.as_str() else { continue };
+            if let Some(c) = models.iter().find(|s| s["name"].as_str() == Some(mn)).and_then(|s| s["max_context_length"].as_u64()) {
+                parts.push(format!("context of {mn}: {c}"));
+            }
+        }
+        lines.push(parts.join(" · "));
+    }
+    if let Ok(j) = get_json(ctx, "/account/jobs?limit=10", true).await {
+        if let Some(t) = j["total_den"].as_f64() {
+            lines.push(format!("Total den earned: {t}"));
+        }
+        let jobs = j["jobs"].as_array().cloned().unwrap_or_default();
+        if jobs.is_empty() {
+            lines.push("No served jobs on record.".into());
+        } else {
+            lines.push("Latest served jobs:".into());
+            for job in jobs.iter().take(10) {
+                let when = job["created"].as_str().or_else(|| job["timestamp"].as_str()).or_else(|| job["ts"].as_str()).unwrap_or("");
+                lines.push(format!(
+                    "  {when} · {} · {} den · {} units · {} s",
+                    job["model"].as_str().unwrap_or("?"),
+                    job["den"].as_f64().unwrap_or(0.0),
+                    job["output_units"].as_u64().unwrap_or(0),
+                    job["duration_s"].as_f64().unwrap_or(0.0),
+                ));
+            }
+        }
+    }
+    match std::fs::read_to_string(ctx.data_dir().join("worker.log")) {
+        Ok(log) => {
+            let all: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+            let bad = |l: &&str| {
+                let l = l.to_lowercase();
+                ["error", "fail", "timeout", "unreachable", "offline", "no ack", "traceback", "crash", "exited", "lost"].iter().any(|k| l.contains(k))
+            };
+            let errors: Vec<&str> = all.iter().copied().filter(|l| bad(l)).collect();
+            lines.push(format!("Worker log of AIPG Desktop on this computer ({} lines):", all.len()));
+            if errors.is_empty() {
+                lines.push("  no error lines".into());
+            } else {
+                lines.push("  latest problems:".into());
+                lines.extend(errors.iter().rev().take(8).rev().map(|l| format!("    {l}")));
+            }
+            lines.push("  last lines:".into());
+            lines.extend(all.iter().rev().take(8).rev().map(|l| format!("    {l}")));
+        }
+        Err(_) => lines.push("No local worker log yet: the worker has not been started from AIPG Desktop on this computer since this feature was added.".into()),
+    }
+    Ok(vec![text(lines.join("\n"))])
 }
 
 /// Extension + MIME type from the image's magic bytes.
@@ -347,7 +766,7 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
     let n = args["n"].as_u64().unwrap_or(1).clamp(1, 4);
     ctx.api_key()?; // fail before looking up models
     let model = match args["model"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(m) => m.to_string(),
+        Some(m) => resolve_model(&status_models(ctx).await, m, "image")?,
         None => {
             let list = get_json(ctx, "/status/models", false).await?;
             list.as_array()
@@ -357,6 +776,8 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
                 .to_string()
         }
     };
+    let per_image = book_rates(&price_book(ctx).await, &model).and_then(|r| r["per_image_usd"].as_f64());
+    ctx.check_limit(per_image.unwrap_or(0.0) * n as f64)?;
     let body = json!({ "model": model, "prompt": prompt, "n": n, "size": size });
     let d = post_json(ctx, "/images/generations", &body, 900).await?;
     let items = d["data"].as_array().cloned().unwrap_or_default();
@@ -402,8 +823,20 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
     if lines.is_empty() {
         return Err("The grid returned no image data.".into());
     }
+    let made = items.len().max(1) as f64;
+    ctx.add_spend(per_image.unwrap_or(0.0) * made);
+    let mut bill = match per_image {
+        Some(p) => format!("Cost about {} ({} per image, list price).", money(p * made), money(p)),
+        None => "No list price is published for this model.".to_string(),
+    };
+    let credit = credit_line(ctx).await;
+    if !credit.is_empty() {
+        bill.push(' ');
+        bill.push_str(&credit);
+        bill.push('.');
+    }
     let mut out = vec![text(format!(
-        "Generated on AI Power Grid with {model} ({size}). The images are in the AIPG Desktop gallery.\n{}",
+        "Generated on AI Power Grid with {model} ({size}). The images are in the AIPG Desktop gallery.\n{}\n{bill}",
         lines.join("\n")
     ))];
     out.extend(content);
@@ -412,13 +845,14 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
 
 fn usd(v: &Value) -> String {
     match v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())) {
-        Some(x) => format!("${x:.3}"),
+        Some(x) => money(x),
         None => "n/a".into(),
     }
 }
 
 async fn grid_models(ctx: &Ctx) -> Result<Vec<Value>, String> {
     let list = get_json(ctx, "/status/models", false).await?;
+    let book = price_book(ctx).await;
     let mut lines = Vec::new();
     for m in list.as_array().map(Vec::as_slice).unwrap_or(&[]) {
         let mut parts = vec![
@@ -440,6 +874,12 @@ async fn grid_models(ctx: &Ctx) -> Result<Vec<Value>, String> {
                 if let (Some(x), Some(label)) = (v.as_f64(), k.strip_suffix("_usd")) {
                     parts.push(format!("{} ${x}", label.replace('_', " ")));
                 }
+            }
+        }
+        if m["type"] == "image" {
+            match book_rates(&book, m["name"].as_str().unwrap_or("")).and_then(|r| r["per_image_usd"].as_f64()) {
+                Some(p) => parts.push(format!("${p} per image")),
+                None => parts.push("no list price published".into()),
             }
         }
         lines.push(parts.join(" · "));
@@ -475,5 +915,10 @@ async fn grid_balance(ctx: &Ctx) -> Result<Vec<Value>, String> {
     if c["charging_enabled"] == false {
         lines.push("Charging is currently off for this account (metering preview).".into());
     }
+    let (spent, requests) = spend_today(&ctx.data_dir());
+    lines.push(match ctx.daily_limit() {
+        Some(limit) => format!("Assistants today: {requests} request(s), about {} of the {} daily limit.", money(spent), money(limit)),
+        None => format!("Assistants today: {requests} request(s), about {} (no daily limit set).", money(spent)),
+    });
     Ok(vec![text(lines.join("\n"))])
 }

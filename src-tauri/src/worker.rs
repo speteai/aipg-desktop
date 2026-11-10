@@ -835,8 +835,10 @@ pub async fn worker_start(
         tokio::spawn(async move {
             let mut lines = BufReader::new(out).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                log_append(&app2, &line);
                 let _ = app2.emit("worker-log", line);
             }
+            log_append(&app2, "[desktop] worker process exited.");
             if procs.worker_gen.load(std::sync::atomic::Ordering::SeqCst) == my_gen {
                 procs.worker.lock().await.take();
                 let _ = app2.emit("worker-exit", true);
@@ -846,8 +848,24 @@ pub async fn worker_start(
     if let Some(err) = stderr {
         pump(app.clone(), err, true);
     }
+    log_append(&app, "[desktop] worker started.");
     let _ = app.emit("worker-log", "[desktop] worker started.");
     Ok(())
+}
+
+/// Keep the worker's output in `worker.log` in the app data folder, so the
+/// connector's status tool can report recent lines and errors. The worker
+/// logs job ids and token counts, never prompts.
+fn log_append(app: &AppHandle, line: &str) {
+    use std::io::Write;
+    let path = data_dir(app).join("worker.log");
+    // start over when it gets large
+    if std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{line}");
+    }
 }
 
 fn pump<R>(app: AppHandle, reader: R, is_err: bool)
@@ -857,6 +875,7 @@ where
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            log_append(&app, &line);
             let _ = app.emit("worker-log", line);
         }
         if !is_err {
