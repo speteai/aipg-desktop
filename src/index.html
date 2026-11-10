@@ -12,7 +12,7 @@
     <button class="nav active" data-view="overview"><span class="ni"></span> Overview</button>
     <button class="nav" data-view="chat"><span class="ni"></span> Chat</button>
     <button class="nav" data-view="images"><span class="ni"></span> Images</button>
-    <button class="nav" data-view="worker"><span class="ni"></span> Run a worker</button>
+    <button class="nav" data-view="worker"><span class="ni"></span> Run a worker<span id="navjob" class="navjob" title="Serving a grid job"></span></button>
     <button class="nav" data-view="models"><span class="ni"></span> Models</button>
     <button class="nav" data-view="earnings"><span class="ni"></span> Earnings</button>
     <button class="nav" data-view="settings"><span class="ni"></span> Settings</button>
@@ -145,6 +145,7 @@
       </div>
       <div id="wpbar" class="pbar" style="display:none"><span></span></div>
       <p class="statusline" id="wstatusline"></p>
+      <p class="jobline" id="wjob"></p>
 
       <details class="adv">
         <summary>Advanced steps &amp; troubleshooting</summary>

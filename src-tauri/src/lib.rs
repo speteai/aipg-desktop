@@ -15,6 +15,15 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+/// Tray tooltip mirrors the worker state ("serving 1 grid job"). Linux trays
+/// have no tooltip, so this is a no-op there.
+#[tauri::command]
+fn tray_status(app: tauri::AppHandle, text: String) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(text));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let procs = Arc::new(Procs::default());
@@ -55,6 +64,7 @@ pub fn run() {
             worker::image_export,
             worker::chats_read,
             worker::chats_write,
+            tray_status,
         ])
         .setup(|app| {
             // System tray: keep the worker earning while the window is closed.

@@ -306,6 +306,59 @@ function logLine(s) {
   el.textContent += (el.textContent ? "\n" : "") + s;
   el.scrollTop = el.scrollHeight;
 }
+/* ---------- live job indicator (parsed from the worker's own log) ----------
+   start:  "Job 1a2b3c4d | model=… | …"  /  "Raw job 1a2b3c4d | format=…"
+   finish: "✅ 1a2b3c4d | 153 tokens | 4.2s | 36.4 TPS | +1.3 den | total: 9.9"
+   Matching ignores the emoji so a mangled console encoding does not break it. */
+const JOBS = new Map(); // short job id -> { t0, model }
+let JOB_TICK = null, JOB_SESSION = { n: 0, den: 0, last: "" }, TRAY_TIP = "";
+function jobsReset(newSession) {
+  JOBS.clear();
+  if (newSession) JOB_SESSION = { n: 0, den: 0, last: "" };
+  renderJobs();
+}
+function trackJobs(line) {
+  let m;
+  if ((m = line.match(/\b(?:Raw job|Job) ([\w-]{4,8}) \| (?:model=([^|]+?) \|)?/))) {
+    JOBS.set(m[1], { t0: Date.now(), model: (m[2] || "").trim() });
+  } else if ((m = line.match(/ ([\w-]{4,8}) \| (.*\+([\d.]+) den) \| total/))) {
+    JOBS.delete(m[1]);
+    JOB_SESSION.n++; JOB_SESSION.den += parseFloat(m[3]) || 0;
+    JOB_SESSION.last = m[2].replace(/ \| /g, " · ");
+  } else if ((m = line.match(/(?:No ack received for (?:raw )?job|ReadTimeout for job|produced 0 tokens for job) ([\w-]{4,8})/))) {
+    JOBS.delete(m[1]);
+  } else if (/Backend unreachable mid-|Connection lost|Backend offline|Connected as worker/.test(line)) {
+    JOBS.clear();
+  } else return;
+  renderJobs();
+}
+function renderJobs() {
+  const now = Date.now();
+  for (const [id, j] of JOBS) if (now - j.t0 > 900000) JOBS.delete(id); // never show a stuck job forever
+  const n = JOBS.size, el = $("#wjob"), nav = $("#navjob");
+  if (nav) nav.className = "navjob" + (n ? " on" : "");
+  let tip = "AIPG Desktop";
+  if (el) {
+    if (!WORKER_RUNNING) { el.textContent = ""; el.className = "jobline"; }
+    else if (n) {
+      const parts = [...JOBS].map(([id, j]) =>
+        `${id}${j.model ? " · " + j.model : ""} · ${Math.round((now - j.t0) / 1000)} s`);
+      el.textContent = (n === 1 ? "Serving a grid job: " : `Serving ${n} grid jobs: `) + parts.join("  |  ");
+      el.className = "jobline busy";
+    } else {
+      el.textContent = "Waiting for grid jobs" +
+        (JOB_SESSION.n ? ` · ${JOB_SESSION.n} served this session · +${JOB_SESSION.den.toFixed(1)} den · last: ${JOB_SESSION.last}` : "");
+      el.className = "jobline";
+    }
+  }
+  if (WORKER_RUNNING) tip = n ? `AIPG Desktop: serving ${n} grid job${n === 1 ? "" : "s"}`
+    : `AIPG Desktop: worker waiting for jobs` + (JOB_SESSION.n ? ` (${JOB_SESSION.n} served)` : "");
+  if (tip !== TRAY_TIP && TAURI.core) { TRAY_TIP = tip; invoke("tray_status", { text: tip }).catch(() => {}); }
+  if (WORKER_RUNNING && !RESTART_T) wsetStatus(n ? `working · ${n} job${n === 1 ? "" : "s"}` : "running", n ? "run busy" : "run");
+  if (n && !JOB_TICK) JOB_TICK = setInterval(renderJobs, 1000);
+  if (!n && JOB_TICK) { clearInterval(JOB_TICK); JOB_TICK = null; }
+}
+
 function wsetStatus(txt, cls) { const c = $("#wstatus"); c.textContent = txt; c.className = "chip" + (cls ? " " + cls : ""); }
 function bar(sel, frac) {
   const b = $(sel); b.style.display = ""; b.firstElementChild.style.width = Math.max(0, Math.min(1, frac)) * 100 + "%";
@@ -532,11 +585,12 @@ function syncRunButtons() {
   $("#btn-stop2").disabled = !WORKER_RUNNING && !RESTART_T;
   $("#btn-auto").disabled = WORKER_RUNNING;
   if (!RESTART_T) wsetStatus(WORKER_RUNNING ? "running" : "idle", WORKER_RUNNING ? "run" : "");
+  renderJobs();
 }
 
 /* crash recovery: restart an unexpectedly exited worker, at most 3× per 10 min */
 let WANT_RUNNING = false, LAST_CFG = null, RESTARTS = [], RESTART_T = null;
-function markStarted(cfg) { WORKER_RUNNING = true; WANT_RUNNING = true; LAST_CFG = cfg; }
+function markStarted(cfg) { WORKER_RUNNING = true; WANT_RUNNING = true; LAST_CFG = cfg; jobsReset(true); }
 function scheduleRestart() {
   const now = Date.now();
   RESTARTS = RESTARTS.filter((t) => now - t < 600000);
@@ -567,7 +621,7 @@ async function stopWorker() {
   WANT_RUNNING = false; clearTimeout(RESTART_T); RESTART_T = null;
   $("#btn-stop").disabled = $("#btn-stop2").disabled = true;
   try { await invoke("worker_stop"); } catch (e) {}
-  WORKER_RUNNING = false; syncRunButtons();
+  WORKER_RUNNING = false; jobsReset(false); syncRunButtons();
 }
 
 async function autoStartWorker() {
@@ -650,9 +704,9 @@ function wireWorker() {
       wprog(PULL_FRAC || 0.03, "Model: " + st);
     }
   });
-  listen("worker-log", (e) => logLine(String(e.payload)));
+  listen("worker-log", (e) => { const l = String(e.payload); logLine(l); trackJobs(l); });
   listen("worker-exit", () => {
-    WORKER_RUNNING = false;
+    WORKER_RUNNING = false; jobsReset(false);
     logLine("[desktop] worker exited.");
     if (WANT_RUNNING && LAST_CFG) { scheduleRestart(); return; }
     syncRunButtons();

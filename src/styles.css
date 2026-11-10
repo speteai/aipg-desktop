@@ -593,3 +593,14 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 /* hidden (retired) workers when revealed */
 .card.dim{opacity:.55}
 .lightbox,:root[data-theme="light"] .lightbox{background:rgba(10,9,8,.9)}
+
+/* live grid-job indicator */
+.jobline{margin:var(--s1) 0 0;color:var(--mut);font:var(--t-small)/1.5 var(--mono);min-height:1.5em}
+.jobline.busy{color:var(--fg)}
+.jobline.busy::before{content:"";display:inline-block;width:7px;height:7px;margin-right:8px;
+  background:var(--acc-fill);animation:pulse 1.2s ease-in-out infinite}
+.chip.busy{color:var(--acc)}
+.chip.busy::before{animation:pulse 1.2s ease-in-out infinite}
+.navjob{display:none;align-self:center;width:7px;height:7px;margin-left:auto;background:var(--acc-fill);
+  animation:pulse 1.2s ease-in-out infinite}
+.navjob.on{display:inline-block}
