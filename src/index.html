@@ -196,6 +196,13 @@
               <option value="16384">16384 tokens</option>
               <option value="32768">32768 tokens</option>
             </select>
+            <span class="k">Keep loaded</span>
+            <select id="ollama-keep" class="sel">
+              <option value="5">5 minutes</option>
+              <option value="30">30 minutes</option>
+              <option value="120">2 hours</option>
+              <option value="-1">always</option>
+            </select>
           </div>
           <label style="display:block;margin-top:8px"><input type="checkbox" id="ollama-own"> Use my own Ollama (port 11434) instead</label>
           <p class="hint" id="ollama-note"></p>

@@ -598,9 +598,14 @@ function modelFit(m) {
 // best pick = the largest mainstream model that runs well here
 function suggestedModel(h) {
   if (!h || !h.ram_gb) return (h && h.recommend) || "";
-  const good = MODEL_CATALOG.filter((m) => m.main && ["gpu", "cpu"].includes(modelFit(m)));
+  // AMD cards (Vulkan/ROCm) are slower with these models than their memory
+  // suggests, and a grid job must finish within the worker's time limit:
+  // suggest at most an 8b model there.
+  const cap = slowGpu(h) ? 7 : Infinity;
+  const good = MODEL_CATALOG.filter((m) => m.main && m.need <= cap && ["gpu", "cpu"].includes(modelFit(m)));
   return good.length ? good[good.length - 1].tag : "";
 }
+function slowGpu(h) { return !!(h && h.vram_gb && /\b(amd|radeon|rx ?\d{3,4})\b/i.test(h.gpu || "")); }
 async function loadGridTags() {
   try {
     const list = await pubGet("/status/models");
@@ -616,6 +621,7 @@ function renderModelPicker() {
   $("#mpick-hint").textContent = (HW.vram_gb
     ? `This machine has about ${HW.vram_gb} GB of graphics memory; models that fit into it run fast.`
     : `No usable GPU found — models run on the processor (${HW.ram_gb} GB RAM). That works, but only small models are practical.`) +
+    (slowGpu(HW) ? " On AMD cards larger models fit but answer slowly, and a grid job has a time limit — so an 8b model is suggested. If you try a 14b model, lower the context length." : "") +
     " Sizes are approximate.";
   const label = { split: "partly on CPU · slow", cpu: "fine on CPU", slow: "very slow on CPU", big: "too large here" };
   box.innerHTML = MODEL_CATALOG.map((m) => {
@@ -814,12 +820,17 @@ function showOllamaSettings(s) {
   if (sel) {
     if (![...sel.options].some((o) => o.value === String(s.ctx))) sel.add(new Option(String(s.ctx), String(s.ctx)));
     sel.value = String(s.ctx);
-    sel.disabled = s.use_system;
+  }
+  const ka = $("#ollama-keep");
+  if (ka) {
+    if (![...ka.options].some((o) => o.value === String(s.keep_alive))) ka.add(new Option(s.keep_alive + " minutes", String(s.keep_alive)));
+    ka.value = String(s.keep_alive);
+    ka.disabled = s.use_system;
   }
   if ($("#ollama-own")) $("#ollama-own").checked = s.use_system;
   if ($("#ollama-note")) $("#ollama-note").textContent = s.use_system
-    ? "Using your own Ollama on port 11434: its models, its context length and its graphics memory. Models you download or delete here are downloaded or deleted there."
-    : `The app runs its own Ollama on port ${s.managed_port}, separate from any Ollama you installed. Models load with this context length, and the worker tells the grid the same number, so long prompts are refused instead of cut off. Larger values need more graphics memory.`;
+    ? "Using your own Ollama on port 11434: its models and its graphics memory. Models you download or delete here are downloaded or deleted there. The context above is only the upper limit the worker reports to the grid; your Ollama decides what it really loads. Start it with OLLAMA_CONTEXT_LENGTH set to at least this value (its default is often 4096), otherwise the worker reports the smaller number. “Keep loaded” is your Ollama's own setting (OLLAMA_KEEP_ALIVE)."
+    : `The app runs its own Ollama on port ${s.managed_port}, separate from any Ollama you installed. Models load with this context length, and the worker tells the grid the same number, so long prompts are refused instead of cut off. Larger values need more graphics memory and make long jobs slower. “Keep loaded” avoids a slow reload before the first job after a quiet spell.`;
 }
 async function loadOllamaSettings() {
   if (!TAURI.core) return;
@@ -832,7 +843,7 @@ async function saveOllamaSettings() {
     "Use your own Ollama on port 11434?\n\nThe app then shares its models and graphics memory: downloads land in your Ollama's store, “Delete” removes models there, and a second worker using the same Ollama competes for the GPU.",
     "Use your own Ollama"))) { return loadOllamaSettings(); }
   try {
-    showOllamaSettings(await invoke("ollama_settings_set", { ctx: parseInt($("#ollama-ctx").value, 10) || 8192, useSystem }));
+    showOllamaSettings(await invoke("ollama_settings_set", { ctx: parseInt($("#ollama-ctx").value, 10) || 8192, useSystem, keepAlive: parseInt($("#ollama-keep").value, 10) || 30 }));
     toast("Ollama settings saved");
     try { await invoke("ollama_ensure"); } catch (e) {}
   } catch (e) { toast(emsg(e)); loadOllamaSettings(); }
@@ -845,6 +856,7 @@ function wireWorker() {
   wireModelPicker();
   $("#ollama-ctx").onchange = saveOllamaSettings;
   $("#ollama-own").onchange = saveOllamaSettings;
+  $("#ollama-keep").onchange = saveOllamaSettings;
 
   listen("worker-dl", (e) => {
     const { received, total } = e.payload || {};

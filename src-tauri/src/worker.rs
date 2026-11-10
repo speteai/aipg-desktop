@@ -451,6 +451,9 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
         .env("OLLAMA_MODELS", &models)
         // the worker advertises this same value to the grid (see worker_start)
         .env("OLLAMA_CONTEXT_LENGTH", ollama_ctx(&app).to_string())
+        // keep the model in memory between jobs, so a job after a quiet
+        // spell does not start with a slow reload
+        .env("OLLAMA_KEEP_ALIVE", keep_alive_env(ollama_keep_alive(&app)))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
@@ -872,8 +875,8 @@ pub async fn worker_start(
 
     let mut cmd = Command::new(&bin);
     // One backend, declared explicitly: this also overrides a GRID_BACKENDS
-    // entry in a .env left by a stand-alone worker install. With the app's
-    // Ollama the advertised context is capped at what Ollama really loads.
+    // entry in a .env left by a stand-alone worker install. The advertised
+    // context is capped at the configured context length.
     let mut backend = serde_json::json!({
         "type": "ollama",
         "url": ollama_url(),
@@ -882,9 +885,9 @@ pub async fn worker_start(
         "name": name,
         "concurrency": 1,
     });
-    if !use_system_ollama() {
-        backend["max_context"] = serde_json::json!(ollama_ctx(&app));
-    }
+    // Also with the user's own Ollama: the worker takes the smaller of this
+    // cap and what the loaded model reports, so it can only lower the claim.
+    backend["max_context"] = serde_json::json!(ollama_ctx(&app));
     if let Ok(mut k) = REDACT_KEY.lock() {
         *k = cfg.api_key.trim().to_string();
     }
@@ -1229,6 +1232,20 @@ fn ollama_ctx(app: &AppHandle) -> u64 {
         .clamp(2048, 131_072)
 }
 
+/// Minutes the app's Ollama keeps a model loaded after its last request;
+/// -1 = until Ollama stops. Ollama's own default is 5 minutes.
+fn ollama_keep_alive(app: &AppHandle) -> i64 {
+    let v = std::fs::read_to_string(config_path(app))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v["ollama_keep_alive"].as_i64())
+        .unwrap_or(30);
+    if v < 0 { -1 } else { v.clamp(1, 1440) }
+}
+fn keep_alive_env(minutes: i64) -> String {
+    if minutes < 0 { "-1".into() } else { format!("{minutes}m") }
+}
+
 /// Read the saved choice once at startup.
 pub fn init_runtime(app: &AppHandle) {
     USE_SYSTEM_OLLAMA.store(
@@ -1243,6 +1260,7 @@ pub struct OllamaSettings {
     ctx: u64,
     use_system: bool,
     managed_port: u16,
+    keep_alive: i64,
 }
 
 #[tauri::command]
@@ -1252,6 +1270,7 @@ pub fn ollama_settings(app: AppHandle) -> OllamaSettings {
         ctx: ollama_ctx(&app),
         use_system: use_system_ollama(),
         managed_port: OLLAMA_MANAGED_PORT,
+        keep_alive: ollama_keep_alive(&app),
     }
 }
 
@@ -1263,6 +1282,7 @@ pub async fn ollama_settings_set(
     state: State<'_, Arc<Procs>>,
     ctx: u64,
     use_system: bool,
+    keep_alive: i64,
 ) -> Result<OllamaSettings, String> {
     if state.worker.lock().await.is_some() {
         return Err("Stop the worker before changing these settings.".into());
@@ -1275,6 +1295,7 @@ pub async fn ollama_settings_set(
         let _ = c.wait().await;
     }
     config_patch(&app, "ollama_ctx", serde_json::json!(ctx))?;
+    config_patch(&app, "ollama_keep_alive", serde_json::json!(if keep_alive < 0 { -1 } else { keep_alive.clamp(1, 1440) }))?;
     config_patch(&app, "use_system_ollama", serde_json::json!(use_system))?;
     USE_SYSTEM_OLLAMA.store(use_system, std::sync::atomic::Ordering::SeqCst);
     Ok(ollama_settings(app))
