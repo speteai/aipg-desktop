@@ -108,7 +108,8 @@ pub fn run() {
                 })
                 .build(&handle)?;
             // Launched at login (autostart passes --minimized): stay in the tray.
-            if std::env::args().any(|a| a == "--minimized") {
+            let just_updated = worker::take_update_marker(&handle);
+            if !just_updated && std::env::args().any(|a| a == "--minimized") {
                 if let Some(w) = handle.get_webview_window("main") {
                     let _ = w.hide();
                 }

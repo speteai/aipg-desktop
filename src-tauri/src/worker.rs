@@ -1018,7 +1018,7 @@ pub async fn update_install(app: AppHandle, state: State<'_, Arc<Procs>>) -> Res
         .map_err(e)?
         .check()
         .await
-        .map_err(e)?
+        .map_err(|x| format!("could not check for the update ({x})"))?
         .ok_or("Already up to date.")?;
     let mut received: u64 = 0;
     let app2 = app.clone();
@@ -1034,12 +1034,28 @@ pub async fn update_install(app: AppHandle, state: State<'_, Arc<Procs>>) -> Res
             || {},
         )
         .await
-        .map_err(e)?;
+        .map_err(|x| format!("download or signature check failed ({x})"))?;
+    let _ = app.emit("update-progress", serde_json::json!({ "stage": "installing" }));
     kill_all(state.inner()).await;
-    update.install(bytes).map_err(e)?;
+    // The relaunch inherits this run's arguments; make sure a login start
+    // (`--minimized`) does not leave the updated app hidden in the tray.
+    let _ = std::fs::create_dir_all(data_dir(&app));
+    let _ = std::fs::write(update_marker(&app), b"1");
+    if let Err(x) = update.install(bytes) {
+        let _ = std::fs::remove_file(update_marker(&app));
+        return Err(format!("the installer could not be started ({x})"));
+    }
     app.restart();
     #[allow(unreachable_code)]
     Ok(())
+}
+
+fn update_marker(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("just_updated")
+}
+/// True once after an in-app update (and clears the marker).
+pub fn take_update_marker(app: &AppHandle) -> bool {
+    std::fs::remove_file(update_marker(app)).is_ok()
 }
 
 /* ------------------------- app config (small JSON file) ------------------------- */

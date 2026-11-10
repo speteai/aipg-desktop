@@ -1374,7 +1374,8 @@ function wireUpdates() {
   $("#btn-update").onclick = () => checkUpdate(true);
   $("#btn-update-install").onclick = installUpdate;
   listen("update-progress", (e) => {
-    const { received, total } = e.payload || {};
+    const { received, total, stage } = e.payload || {};
+    if (stage === "installing") { $("#updmsg").textContent = "Installing… the app closes and reopens in a moment."; return; }
     $("#updmsg").textContent = total
       ? `Downloading update… ${fmtBytes(received)} / ${fmtBytes(total)} · ${Math.round(received / total * 100)} %`
       : `Downloading update… ${fmtBytes(received)}`;
