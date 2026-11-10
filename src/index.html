@@ -15,6 +15,7 @@
     <button class="nav" data-view="worker"><span class="ni"></span> Run a worker<span id="navjob" class="navjob" title="Serving a grid job"></span></button>
     <button class="nav" data-view="models"><span class="ni"></span> Models</button>
     <button class="nav" data-view="earnings"><span class="ni"></span> Earnings</button>
+    <button class="nav" data-view="connect"><span class="ni"></span> Connect</button>
     <button class="nav" data-view="settings"><span class="ni"></span> Settings</button>
     <div class="spacer"></div>
     <div class="conn" id="conn"><span class="dot" id="conndot"></span><span id="connlabel">not connected</span></div>
@@ -240,6 +241,54 @@
       <div class="tablewrap"><table id="jobs"><thead><tr>
         <th>when</th><th>model</th><th>type</th><th>den</th><th>units</th><th>dur</th>
       </tr></thead><tbody></tbody></table></div>
+    </section>
+
+    <!-- CONNECT -->
+    <section class="view" id="view-connect">
+      <header class="vh"><h1>Connect</h1><span id="cn-state" class="chip">off</span></header>
+      <p class="muted">Let an AI assistant on this computer hand work to the grid: text tasks, image
+        generation, model list and your credit. It runs locally as an MCP connector; nothing is hosted.</p>
+      <div id="cn-unavailable" class="banner" style="display:none">The connector is only available in the desktop app.</div>
+      <div id="cn-body">
+        <div class="field" style="max-width:none">
+          <label>Local connector</label>
+          <div class="row">
+            <button class="btn primary" id="cn-enable">Enable connector</button>
+            <button class="btn ghost" id="cn-disable" style="display:none">Disable</button>
+          </div>
+          <p class="hint">Enabling stores your API key in a file in this app's data folder so the connector can use it.
+            Whatever the assistant sends to the grid is billed to your account (your daily free allowance is used first when active).</p>
+        </div>
+        <div id="cn-clients" style="display:none">
+          <div class="field" style="max-width:none">
+            <label>Claude Desktop</label>
+            <div class="row">
+              <button class="btn" id="cn-claude-add">Add to Claude Desktop</button>
+              <button class="btn ghost" id="cn-claude-remove" style="display:none">Remove</button>
+            </div>
+            <p class="hint"><span id="cn-claude-msg"></span><br>Config file: <span id="cn-claude-path" class="path"></span>
+              (a backup of the previous file is kept next to it).</p>
+          </div>
+          <div class="field" style="max-width:none">
+            <label>Claude Code</label>
+            <pre id="cn-command" class="log cnpre"></pre>
+            <div class="row"><button class="btn" id="cn-copy-command">Copy command</button></div>
+            <p class="hint">Run it once in a terminal.</p>
+          </div>
+          <div class="field" style="max-width:none">
+            <label>Other MCP clients (Cursor, Cline, …)</label>
+            <pre id="cn-snippet" class="log cnpre"></pre>
+            <div class="row"><button class="btn" id="cn-copy-snippet">Copy config</button></div>
+            <p class="hint">Paste into the client's MCP server configuration. ChatGPT and claude.ai in the browser
+              only accept hosted connectors and cannot use this one.</p>
+          </div>
+          <div class="field" style="max-width:none">
+            <label>Try it</label>
+            <p class="hint">Ask the assistant, for example: “Generate an image of a lighthouse at dusk on the grid”,
+              “Summarise this text using the grid”, or “What is my grid balance?”.</p>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- SETTINGS -->

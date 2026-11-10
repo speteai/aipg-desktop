@@ -4,6 +4,8 @@ use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
+mod connector;
+mod mcp;
 mod worker;
 use worker::Procs;
 
@@ -22,6 +24,12 @@ fn tray_status(app: tauri::AppHandle, text: String) {
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(text));
     }
+}
+
+/// `--mcp <connector.json>`: run as a local MCP server on stdio instead of
+/// opening the app (launched by Claude Desktop, Claude Code, …).
+pub fn run_connector(key_file: String) {
+    mcp::run_stdio(key_file.into());
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -65,6 +73,11 @@ pub fn run() {
             worker::chats_read,
             worker::chats_write,
             tray_status,
+            connector::connector_status,
+            connector::connector_enable,
+            connector::connector_disable,
+            connector::connector_claude_add,
+            connector::connector_claude_remove,
         ])
         .setup(|app| {
             // System tray: keep the worker earning while the window is closed.

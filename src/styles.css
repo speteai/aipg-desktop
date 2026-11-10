@@ -604,3 +604,9 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .navjob{display:none;align-self:center;width:7px;height:7px;margin-left:auto;background:var(--acc-fill);
   animation:pulse 1.2s ease-in-out infinite}
 .navjob.on{display:inline-block}
+
+/* stat sub-line (credit pockets, free allowance) */
+.stat .n{margin-top:var(--s1);color:var(--mut);font:var(--t-micro)/1.4 var(--mono)}
+.stat .v small{font-size:.55em;font-weight:400;color:var(--mut)}
+/* connect view */
+.cnpre{max-height:none;white-space:pre-wrap;word-break:break-all;user-select:all;margin:0 0 var(--s2)}

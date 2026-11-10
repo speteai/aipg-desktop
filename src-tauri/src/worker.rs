@@ -50,7 +50,7 @@ fn quiet(cmd: &mut Command) -> &mut Command {
 
 /* ------------------------- paths ------------------------- */
 
-fn data_dir(app: &AppHandle) -> PathBuf {
+pub(crate) fn data_dir(app: &AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir())

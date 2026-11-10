@@ -52,8 +52,13 @@ running a worker is optional.
   - shows live download progress (GB and %), lets you pick **where models are stored**,
     and lists installed models with their size so you can delete what you no longer need,
   - restarts the worker automatically if it crashes.
-- **Overview / Models / Earnings** — spendable balance, workers online (retired workers
+- **Overview / Models / Earnings** — spendable balance with today's free allowance, workers online (retired workers
   can be hidden), den earned and jobs; live model list with prices; recent jobs plus a **local earnings-history graph**.
+- **Connect** — a local **MCP connector** lets assistants on the same computer (Claude
+  Desktop, Claude Code, Cursor, …) offload work to the grid: run a text task, generate
+  images, list models, check your credit. One click registers it with Claude Desktop.
+  It runs on your machine (`aipg-desktop --mcp`), so hosted clients such as ChatGPT or
+  claude.ai in the browser cannot use it.
 - **Offline alerts** — native notifications when a worker goes offline, enters
   maintenance, or recovers (while the app is open), optionally also pushed to your phone
   via an [ntfy](https://ntfy.sh) topic.
@@ -66,6 +71,9 @@ running a worker is optional.
 ## Security & privacy
 
 - Your API key is stored **locally** and sent only to `api.aipowergrid.io`.
+- If you enable the connector, the key is also written to a file in the app's data folder
+  (owner-readable only on Linux/macOS) so the connector process can use it; disabling the
+  connector removes that file.
 - The app is sandboxed by Tauri's capability allowlist; its content-security policy only
   permits connections to the grid API, `ntfy.sh`, and the local inference backend.
 - The managed Ollama and worker run as sandboxed child processes under the app's data

@@ -97,7 +97,8 @@ async function loadOverview() {
     const [w, c] = await Promise.all([api("/account/workers"), api("/account/credits")]);
     setConn("ok", "connected");
     $("#stats").innerHTML = `
-      ${stat("Spendable", money(c.total_spendable_usd), "green")}
+      ${stat("Spendable", money(c.total_spendable_usd), "green", creditNote(c))}
+      ${c.free ? stat("Free today", `${money(c.free.remaining_usd)} <small>/ ${money(c.free.daily_cap_usd)}</small>`, "", freeNote(c.free)) : ""}
       ${stat("Workers online", (() => {
         const hid = hiddenWorkers(), vis = (w.workers || []).filter((x) => !hid.includes(x.name));
         return w.workers ? `${vis.filter((x) => x.online).length} / ${vis.length}` : `${w.online || 0} / ${w.count || 0}`;
@@ -113,8 +114,23 @@ async function loadOverview() {
     toast(e.message);
   }
 }
-function stat(k, v, cls) {
-  return `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div></div>`;
+function stat(k, v, cls, note) {
+  return `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div>${note ? `<div class="n">${note}</div>` : ""}</div>`;
+}
+/* The grid keeps three pockets: daily free allowance, promotional credit and
+   purchased balance. `free.active === false` means the allowance is shown but
+   not spendable yet. */
+function freeNote(f) {
+  const h = (new Date().setUTCHours(24, 0, 0, 0) - Date.now()) / 3600000;
+  const reset = h < 1 ? `resets in ${Math.max(1, Math.round(h * 60))} min` : `resets in ${Math.round(h)} h`;
+  return [reset, f.active === false ? "not spendable yet" : "", f.holder_bonus_active ? "holder bonus" : ""].filter(Boolean).join(" · ");
+}
+function creditNote(c) {
+  const parts = [];
+  if (c.paid && c.paid.balance_usd != null) parts.push(`balance ${money(c.paid.balance_usd)}`);
+  if (c.promotional && Number(c.promotional.remaining_usd) > 0) parts.push(`promo ${money(c.promotional.remaining_usd)}`);
+  if (c.charging_enabled === false) parts.push("billing off");
+  return parts.join(" · ");
 }
 /* Workers can't be deleted through the grid API, so retired ones are hidden
    locally (per device). Hidden workers are also excluded from offline alerts. */
@@ -1222,6 +1238,63 @@ function show(view) {
   if (view === "worker") loadWorker();
   if (view === "models") loadModels();
   if (view === "earnings") loadEarnings();
+  if (view === "connect") loadConnect();
+}
+
+/* ---------- connect: local MCP connector for Claude & co. ---------- */
+let CONNECT_WIRED = false;
+async function copyText(txt, okMsg) {
+  try { await navigator.clipboard.writeText(txt); toast(okMsg || "Copied"); }
+  catch (e) { toast("Could not copy; select the text manually"); }
+}
+function renderConnect(st) {
+  $("#cn-state").textContent = st.enabled ? "enabled" : "off";
+  $("#cn-state").className = "chip" + (st.enabled ? " on" : "");
+  $("#cn-enable").style.display = st.enabled ? "none" : "";
+  $("#cn-disable").style.display = st.enabled ? "" : "none";
+  $("#cn-clients").style.display = st.enabled ? "" : "none";
+  $("#cn-claude-add").textContent = st.claude_registered ? "Update Claude Desktop entry" : "Add to Claude Desktop";
+  $("#cn-claude-remove").style.display = st.claude_registered ? "" : "none";
+  $("#cn-claude-msg").textContent = st.claude_registered
+    ? "Registered. Quit and reopen Claude Desktop to load it."
+    : st.claude_found ? "Claude Desktop found on this computer."
+    : "Claude Desktop was not found here; the entry is written anyway and used once it is installed.";
+  $("#cn-claude-path").textContent = st.claude_config;
+  $("#cn-command").textContent = st.command;
+  $("#cn-snippet").textContent = st.snippet;
+}
+async function loadConnect() {
+  if (!TAURI.core) { $("#cn-unavailable").style.display = ""; $("#cn-body").style.display = "none"; return; }
+  if (!CONNECT_WIRED) {
+    CONNECT_WIRED = true;
+    const run = async (cmd, args, msg) => {
+      try { await invoke(cmd, args || {}); if (msg) toast(msg); } catch (e) { toast(emsg(e)); }
+      loadConnect();
+    };
+    $("#cn-enable").onclick = () => {
+      if (!apiKey()) { toast("Save your API key in Settings first"); return show("settings"); }
+      run("connector_enable", { apiKey: apiKey() }, "Connector enabled");
+    };
+    $("#cn-disable").onclick = async () => {
+      if (!(await askConfirm("Turn the connector off? Its stored key and the Claude Desktop entry are removed.", "Disable connector", false))) return;
+      run("connector_disable", {}, "Connector disabled");
+    };
+    $("#cn-claude-add").onclick = () => run("connector_claude_add", {}, "Added. Restart Claude Desktop.");
+    $("#cn-claude-remove").onclick = () => run("connector_claude_remove", {}, "Removed from Claude Desktop");
+    $("#cn-copy-command").onclick = () => copyText($("#cn-command").textContent, "Command copied");
+    $("#cn-copy-snippet").onclick = () => copyText($("#cn-snippet").textContent, "Config copied");
+  }
+  try { renderConnect(await invoke("connector_status")); } catch (e) { toast(emsg(e)); }
+}
+/* keep the connector's stored key in step with the key in Settings */
+async function syncConnectorKey() {
+  if (!TAURI.core) return;
+  try {
+    const st = await invoke("connector_status");
+    if (!st.enabled) return;
+    if (apiKey()) await invoke("connector_enable", { apiKey: apiKey() });
+    else await invoke("connector_disable");
+  } catch (e) {}
 }
 
 /* ---------- wire up ---------- */
@@ -1240,8 +1313,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#key").value = get(LS.key) || "";
   $("#ntfy").value = get(LS.ntfy) || "";
   $("#alerts").checked = get(LS.alerts) === "1";
-  $("#savekey").onclick = () => { set(LS.key, $("#key").value.trim()); toast("Key saved"); startPolling(); show("overview"); };
-  $("#clearkey").onclick = () => { del(LS.key); $("#key").value = ""; toast("Key forgotten"); startPolling(); loadOverview(); };
+  $("#savekey").onclick = () => { set(LS.key, $("#key").value.trim()); toast("Key saved"); syncConnectorKey(); startPolling(); show("overview"); };
+  $("#clearkey").onclick = () => { del(LS.key); $("#key").value = ""; toast("Key forgotten"); syncConnectorKey(); startPolling(); loadOverview(); };
   $("#saventfy").onclick = () => { set(LS.ntfy, $("#ntfy").value.trim()); toast("ntfy topic saved"); };
   $("#alerts").onchange = (e) => {
     set(LS.alerts, e.target.checked ? "1" : "0");
