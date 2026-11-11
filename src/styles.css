@@ -679,6 +679,26 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
   .ovcells i{animation:none !important}
   .ovwork.busy .ovcells i{transform:none;opacity:1}
 }
+/* Overview: history of the worker on this computer. Each column is one hour
+   (or one day); the muted bar is the share of it the worker was online, the
+   accent bar the share it was serving grid jobs. */
+.usechart{display:flex;align-items:stretch;gap:2px;margin-top:var(--s2);border-bottom:1px solid var(--bd-strong)}
+.usechart.r7d{gap:10px}
+.usecol{flex:1 1 0;min-width:0;display:flex;flex-direction:column;outline-offset:1px;position:relative}
+.usetrack{position:relative;height:84px}
+.usecol:hover .usetrack,.usecol:focus-visible .usetrack{background:var(--panel)}
+.usetrack i{position:absolute;left:0;right:0;bottom:0;min-height:2px;border-radius:3px 3px 0 0}
+.u-on{background:var(--bd-strong)}
+.u-busy{background:var(--acc-fill)}
+.usetick{position:absolute;top:100%;left:0;margin-top:4px;white-space:nowrap;color:var(--mut);font:11px/1 var(--mono)}
+.usechart.r7d .usetick{left:50%;transform:translateX(-50%)}
+.usecol:last-child .usetick{left:auto;right:0;transform:none}
+.uselegend{display:flex;gap:var(--s4);margin-top:22px;color:var(--mut);font-size:var(--t-small)}
+.uselegend i{display:inline-block;width:9px;height:9px;margin-right:6px;border-radius:2px}
+.uselegend .k-on{background:var(--bd-strong)}
+.uselegend .k-busy{background:var(--acc-fill)}
+.usebtn.on{color:var(--fg);box-shadow:inset 0 -2px 0 var(--acc-fill)}
+#usesum{font-family:var(--mono);min-height:1.5em;max-width:none}
 .navjob{display:none;align-self:center;width:7px;height:7px;margin-left:auto;background:var(--acc-fill);
   animation:pulse 1.2s ease-in-out infinite}
 .navjob.on{display:inline-block}
