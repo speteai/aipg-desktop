@@ -851,6 +851,7 @@ pub async fn worker_start(
     app: AppHandle,
     state: State<'_, Arc<Procs>>,
     cfg: WorkerCfg,
+    reason: Option<String>,
 ) -> Result<(), String> {
     // Reap/kill any previous worker so a restart is always clean.
     {
@@ -903,9 +904,19 @@ pub async fn worker_start(
         .arg("--worker-name")
         .arg(&name);
     // Give the worker's local dashboard a free port to avoid "port 7861 in use".
-    if let Some(port) = free_port() {
+    let dash_port = free_port();
+    if let Some(port) = dash_port {
         cmd.arg("--port").arg(port.to_string());
     }
+    // The dashboard also serves the worker's log. The Windows build of the
+    // worker has no console, so nothing arrives on its output pipes; the log
+    // is then read from there, with a token only this app knows.
+    let dash_token = {
+        let mut b = [0u8; 16];
+        let _ = getrandom::getrandom(&mut b);
+        b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    };
+    cmd.env("DASHBOARD_TOKEN", &dash_token);
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -925,29 +936,157 @@ pub async fn worker_start(
 
     // When stdout closes (process ended), clear the stored child so a restart
     // isn't blocked and worker_running() reflects reality.
+    let piped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(out) = stdout {
         let procs = state.inner().clone();
         let app2 = app.clone();
+        let piped = piped.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(out).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                piped.store(true, std::sync::atomic::Ordering::SeqCst);
                 let line = redact(&line);
                 log_append(&app2, &line);
                 let _ = app2.emit("worker-log", line);
             }
-            log_append(&app2, "[desktop] worker process exited.");
             if procs.worker_gen.load(std::sync::atomic::Ordering::SeqCst) == my_gen {
-                procs.worker.lock().await.take();
+                // still the stored child: it ended on its own, so say how
+                let child = procs.worker.lock().await.take();
+                let how = match child {
+                    Some(mut c) => match tokio::time::timeout(std::time::Duration::from_secs(3), c.wait()).await {
+                        Ok(Ok(st)) => format!("worker process ended on its own ({st})."),
+                        _ => "worker process ended on its own.".to_string(),
+                    },
+                    None => "worker process stopped by the app.".to_string(),
+                };
+                log_append(&app2, &desk_line(&how));
                 let _ = app2.emit("worker-exit", true);
+            } else {
+                log_append(&app2, &desk_line("previous worker process replaced by a new start."));
             }
         });
     }
     if let Some(err) = stderr {
-        pump(app.clone(), err, true);
+        pump(app.clone(), err, true, piped.clone());
     }
-    log_append(&app, "[desktop] worker started.");
-    let _ = app.emit("worker-log", "[desktop] worker started.");
+    let why = reason.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("no reason given");
+    let line = desk_line(&format!("worker started ({}) · model {} · reason: {}", WORKER_TAG, cfg.model.trim(), redact(why)));
+    log_append(&app, &line);
+    let _ = app.emit("worker-log", line);
+    poll_dashboard_log(app.clone(), state.inner().clone(), my_gen, dash_port.unwrap_or(7861), dash_token, piped);
+    preload_model(app.clone(), state.inner().clone(), my_gen, cfg.model.trim().to_string());
     Ok(())
+}
+
+/// `[desktop] 2026-11-11 20:31:05Z text`: lines the app itself adds to the log.
+fn desk_line(msg: &str) -> String {
+    format!("[desktop] {} {msg}", utc_stamp())
+}
+
+/// UTC date and time without a date crate (days-to-civil after H. Hinnant).
+fn utc_stamp() -> String {
+    let s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (days, rem) = ((s / 86_400) as i64, s % 86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+/// A note from the user interface for the log file (why a restart happens).
+#[tauri::command]
+pub fn worker_note(app: AppHandle, text: String) {
+    let text: String = text.chars().filter(|c| !c.is_control()).take(300).collect();
+    log_append(&app, &desk_line(&redact(&text)));
+}
+
+/// How many lines at the end of `now` are new compared with `old`. The
+/// dashboard keeps the last 500 lines, so `now` is `old` minus some lines at
+/// the front plus the new ones at the end.
+fn new_tail(old: &[String], now: &[String]) -> usize {
+    for d in 0..=old.len() {
+        let keep = &old[d..];
+        if keep.len() <= now.len() && now[..keep.len()] == *keep {
+            return now.len() - keep.len();
+        }
+    }
+    now.len()
+}
+
+/// Read the worker's log from its local dashboard for as long as nothing
+/// arrives on its output pipes (see `worker_start`).
+fn poll_dashboard_log(
+    app: AppHandle,
+    procs: Arc<Procs>,
+    my_gen: u64,
+    port: u16,
+    token: String,
+    piped: Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering::SeqCst;
+    tokio::spawn(async move {
+        let Ok(http) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build() else { return };
+        let mut seen: Vec<String> = Vec::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if procs.worker_gen.load(SeqCst) != my_gen || piped.load(SeqCst) || procs.worker.lock().await.is_none() {
+                return;
+            }
+            let Ok(r) = http.get(format!("http://127.0.0.1:{port}/api/logs")).bearer_auth(&token).send().await else { continue };
+            if !r.status().is_success() {
+                continue;
+            }
+            let Ok(v) = r.json::<serde_json::Value>().await else { continue };
+            let now: Vec<String> = v["lines"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|l| l.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let fresh = new_tail(&seen, &now);
+            for line in &now[now.len() - fresh..] {
+                let line = redact(line);
+                log_append(&app, &line);
+                let _ = app.emit("worker-log", line);
+            }
+            seen = now;
+        }
+    });
+}
+
+/// Load the model into memory right after the start, so the first grid job
+/// does not have to wait for it (a job that waits too long times out).
+fn preload_model(app: AppHandle, procs: Arc<Procs>, my_gen: u64, model: String) {
+    tokio::spawn(async move {
+        let note = |msg: String| {
+            let line = desk_line(&msg);
+            log_append(&app, &line);
+            let _ = app.emit("worker-log", line);
+        };
+        let Ok(http) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(600)).build() else { return };
+        note(format!("loading {model} into memory so the first job does not wait for it…"));
+        let t0 = std::time::Instant::now();
+        let r = http
+            .post(format!("{}/api/generate", ollama_url()))
+            .json(&serde_json::json!({ "model": model }))
+            .send()
+            .await;
+        if procs.worker_gen.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+            return;
+        }
+        match r {
+            Ok(r) if r.status().is_success() => note(format!("{model} is loaded ({} s).", t0.elapsed().as_secs())),
+            Ok(r) => note(format!("{model} could not be loaded ahead of time (HTTP {}); it loads with the first job.", r.status().as_u16())),
+            Err(e) => note(format!("{model} could not be loaded ahead of time ({e}); it loads with the first job.")),
+        }
+    });
 }
 
 /// Keep the worker's output in `worker.log` in the app data folder, so the
@@ -965,13 +1104,14 @@ fn log_append(app: &AppHandle, line: &str) {
     }
 }
 
-fn pump<R>(app: AppHandle, reader: R, is_err: bool)
+fn pump<R>(app: AppHandle, reader: R, is_err: bool, piped: Arc<std::sync::atomic::AtomicBool>)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            piped.store(true, std::sync::atomic::Ordering::SeqCst);
             let line = redact(&line);
             log_append(&app, &line);
             let _ = app.emit("worker-log", line);

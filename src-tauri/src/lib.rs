@@ -121,6 +121,7 @@ pub fn run() {
             worker::update_install,
             worker::ollama_pull,
             worker::worker_start,
+            worker::worker_note,
             worker::worker_stop,
             worker::worker_running,
             worker::models_dir_get,
