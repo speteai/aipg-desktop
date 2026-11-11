@@ -796,11 +796,24 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
             note.push_str(&format!(" ({r} of them reasoning)"));
         }
         if let Some(r) = rates {
-            let c = text_cost(r, i, o);
-            cost = Some(c);
-            note.push_str(&format!(" · cost about {} (list price)", money(c)));
+            cost = Some(text_cost(r, i, o));
         }
     }
+    // The grid bills its own token count, which is lower than the count the
+    // model reports, so the balance tells the truth. The difference is only
+    // taken when it is plausible for this one request.
+    let charged = match (credit_before, spendable(ctx).await) {
+        (Some(b), Some(a)) if b - a > 0.000_000_5 => Some(b - a),
+        _ => None,
+    }
+    .filter(|c| cost.map(|list| *c <= list * 1.5 + 0.000_001).unwrap_or(reserved <= 0.0 || *c <= reserved));
+    match (charged, cost) {
+        (Some(c), Some(list)) => note.push_str(&format!(" · charged {} (balance before and after; list price for the reported tokens would be {})", money(c), money(list))),
+        (Some(c), None) => note.push_str(&format!(" · charged {} (balance before and after)", money(c))),
+        (None, Some(list)) => note.push_str(&format!(" · cost about {} (list price; the grid usually charges a little less)", money(list))),
+        (None, None) => {}
+    }
+    let cost = charged.or(cost);
     // unknown price: keep the reservation rather than booking nothing
     ctx.settle(reserved, cost.unwrap_or(reserved), true);
     note.push_str(reasoning_note);
@@ -823,11 +836,21 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
             if thought > 0 { format!(", {thought} characters of hidden reasoning") } else { String::new() }
         ));
     }
-    Ok(vec![
-        text(UNTRUSTED_HEAD),
-        text(answer),
-        text(format!("{UNTRUSTED_TAIL}\n[{note}]")),
-    ])
+    Ok(vec![text(format!("{UNTRUSTED_HEAD}\n{}\n{UNTRUSTED_TAIL}\n[{note}]", defuse_markers(answer)))])
+}
+
+/// An answer must not be able to close its own frame: the two marker lines
+/// are removed from it wherever they appear, in any letter case.
+fn defuse_markers(answer: &str) -> String {
+    let mut out = answer.to_string();
+    for marker in ["<<<end of grid output>>>", "<<<grid output>>>"] {
+        loop {
+            // ASCII lowercase keeps byte positions
+            let Some(at) = out.to_ascii_lowercase().find(marker) else { break };
+            out.replace_range(at..at + marker.len(), "[marker removed]");
+        }
+    }
+    out
 }
 
 /// Frame around every model answer. The text comes from a machine run by an
@@ -966,6 +989,8 @@ async fn grid_worker_status(ctx: &Ctx) -> Result<Vec<Value>, String> {
                 }
                 match v {
                     Value::Null => {}
+                    // the grid writes this when the worker connects, not when it works
+                    Value::String(s) if !s.is_empty() && k == "last_seen" => parts.push(format!("connected since {s}")),
                     Value::String(s) if !s.is_empty() => parts.push(format!("{k} {s}")),
                     Value::Number(n) => parts.push(format!("{k} {n}")),
                     Value::Bool(b) => parts.push(format!("{k} {b}")),
@@ -994,7 +1019,7 @@ async fn grid_worker_status(ctx: &Ctx) -> Result<Vec<Value>, String> {
         if jobs.is_empty() {
             lines.push("No served jobs on record.".into());
         } else {
-            lines.push("Latest served jobs:".into());
+            lines.push("Latest served jobs (units = output tokens as the grid counts them for the reward; this count is lower than the token count the model reports to the caller):".into());
             for job in jobs.iter().take(10) {
                 let when = job["created"].as_str().or_else(|| job["timestamp"].as_str()).or_else(|| job["ts"].as_str()).unwrap_or("");
                 lines.push(format!(

@@ -1082,7 +1082,32 @@ fn preload_model(app: AppHandle, procs: Arc<Procs>, my_gen: u64, model: String) 
             return;
         }
         match r {
-            Ok(r) if r.status().is_success() => note(format!("{model} is loaded ({} s).", t0.elapsed().as_secs())),
+            Ok(r) if r.status().is_success() => {
+                // how much of it sits on the graphics card
+                let mut where_ = String::new();
+                if let Ok(ps) = http.get(format!("{}/api/ps", ollama_url())).send().await {
+                    if let Ok(v) = ps.json::<serde_json::Value>().await {
+                        let hit = v["models"].as_array().and_then(|a| {
+                            a.iter().find(|m| m["name"].as_str() == Some(model.as_str()) || m["model"].as_str() == Some(model.as_str()))
+                        });
+                        if let Some(m) = hit {
+                            if let (Some(size), Some(vram)) = (m["size"].as_f64(), m["size_vram"].as_f64()) {
+                                if size > 0.0 {
+                                    let pct = (vram / size * 100.0).round();
+                                    where_ = if pct >= 99.5 {
+                                        " It runs entirely on the graphics card.".to_string()
+                                    } else if pct <= 0.5 {
+                                        " It runs on the processor only, without the graphics card: answers will be slow.".to_string()
+                                    } else {
+                                        format!(" Only {pct} % of it fits on the graphics card, the rest runs on the processor and is slow: a smaller model or a shorter context length avoids that.")
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+                note(format!("{model} is loaded ({} s).{where_}", t0.elapsed().as_secs()));
+            }
             Ok(r) => note(format!("{model} could not be loaded ahead of time (HTTP {}); it loads with the first job.", r.status().as_u16())),
             Err(e) => note(format!("{model} could not be loaded ahead of time ({e}); it loads with the first job.")),
         }
