@@ -1340,13 +1340,15 @@ function refreshCheck(c, m) { const el = CHECK_EL.get(m); if (el && el.isConnect
 async function askOnce(src, model, messages, maxTokens) {
   const headers = { "Content-Type": "application/json" };
   if (src === "grid") { await authFresh(); headers["Authorization"] = "Bearer " + apiKey(); }
+  const t0 = Date.now();
   const r = await fetch((src === "grid" ? API : OLLAMA_LOCAL) + "/chat/completions", {
     method: "POST", headers, body: JSON.stringify({ model, messages, stream: false, max_tokens: maxTokens }),
   });
   let d = {}; try { d = await r.json(); } catch (e) {}
   if (!r.ok) throw new Error("HTTP " + r.status + (d && d.detail ? ": " + (typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail)) : ""));
   const msg = (d.choices && d.choices[0] && d.choices[0].message) || {};
-  return { text: String(msg.content || "").trim(), id: d.id || "", model: d.model || model };
+  return { text: String(msg.content || "").trim(), id: d.id || "", model: d.model || model,
+    t0, t1: Date.now(), tokens: (d.usage && d.usage.completion_tokens) || 0 };
 }
 // Who gives the second opinion: another grid model that is online (fastest
 // first), else a model on this computer, else the same model once more.
@@ -1366,15 +1368,23 @@ async function pickChecker(used) {
   return used ? { src: "grid", model: used, kind: "same" } : null;
 }
 // Worker names for finished requests, as far as the public job feed shows them.
-async function workersFor(ids) {
-  const out = ids.map(() => "");
+async function workersFor(reqs) {
+  // The grid returns no job id with an answer, so the job is found in the
+  // public feed by model, time and size; only an unambiguous match counts.
+  const out = reqs.map(() => "");
   try {
     const r = await fetch(API + "/jobs/recent?limit=50", { headers: { "Accept": "application/json" } });
     const jobs = (await r.json()).jobs || [];
-    ids.forEach((raw, i) => {
-      const id = String(raw || "").replace(/^chatcmpl-/, ""); if (id.length < 8) return;
-      const j = jobs.find((x) => x.job_id && (x.job_id === id || x.job_id.startsWith(id) || id.startsWith(x.job_id)));
-      if (j && j.worker) out[i] = String(j.worker);
+    const nm = (x) => String(x || "").toLowerCase().replace(/^grid\//, "");
+    reqs.forEach((q, i) => {
+      if (!q || !q.model || !q.t0 || !q.t1) return;
+      const hit = jobs.filter((x) => {
+        const at = Date.parse(String(x.created || "").replace(/\.\d+/, ""));
+        return x.worker && (x.type || "text") === "text" && nm(x.model) === nm(q.model) &&
+          at >= q.t0 - 3000 && at <= q.t1 + 10000 &&
+          (!q.tokens || x.output_units == null || (x.output_units <= q.tokens && x.output_units >= q.tokens * 0.75));
+      });
+      if (hit.length === 1) out[i] = String(hit[0].worker);
     });
   } catch (e) {}
   return out;
@@ -1417,7 +1427,8 @@ async function crossCheck(c, m) {
       "Then name the concrete differences in at most three short sentences, or say that there are none.";
     const judged = await askOnce(pick.src, pick.model, [...note(), { role: "user", content: prompt }], 1024);
     const v = parseVerdict(judged.text);
-    const [w1, w2] = pick.src === "grid" ? await workersFor([m.rid, second.id]) : [(await workersFor([m.rid]))[0], ""];
+    const first = { model: m.used, t0: m.t0, t1: m.t1 };
+    const [w1, w2] = pick.src === "grid" ? await workersFor([first, second]) : [(await workersFor([first]))[0], ""];
     m.check = { verdict: v.verdict, note: show(v.note), answer: show(second.text), model: second.model || pick.model, src: pick.src, kind: pick.kind, w1, w2, at: Date.now() };
   } catch (e) {
     m.check = { verdict: "failed", note: emsg(e), at: Date.now() };
@@ -1639,6 +1650,7 @@ async function chatSend() {
   if (/qwen3|gpt-oss|auto|deepseek|qwen38/i.test(model)) payload.max_tokens = 2048;
 
   let acc = "", think = "", rid = "", used = "", reply = null;
+  const sentAt = Date.now();
   try {
     const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload), signal: CHAT_ABORT.signal });
     if (!r.ok) { let d = ""; try { d = (await r.json()).detail || ""; } catch (e) {} throw new Error("HTTP " + r.status + (d ? ": " + d : "")); }
@@ -1668,7 +1680,7 @@ async function chatSend() {
     acc = shown(acc);
     body.textContent = acc;
     reply = { role: "assistant", content: acc, model: label };
-    if (src === "grid") { reply.rid = rid; reply.used = used; }
+    if (src === "grid") { reply.rid = rid; reply.used = used || model; reply.t0 = sentAt; reply.t1 = Date.now(); }
     c.msgs.push(reply);
     c.updated = Date.now();
   } catch (e) {
