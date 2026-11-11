@@ -170,6 +170,7 @@ function hiddenWorkers() { try { return JSON.parse(get("aipg_hidden_workers") ||
 function setHiddenWorkers(list) { set("aipg_hidden_workers", JSON.stringify([...new Set(list)])); }
 function renderWorkers(workers) {
   LAST_WORKERS = workers;
+  setTimeout(() => renderOverviewWork(JOBS.size, Date.now()), 0);
   const hidden = hiddenWorkers();
   const nHidden = workers.filter((w) => hidden.includes(w.name)).length;
   const shown = workers.filter((w) => SHOW_HIDDEN || !hidden.includes(w.name));
@@ -188,7 +189,7 @@ function renderWorkers(workers) {
     const badge = maint ? '<span class="chip">maintenance</span>'
       : on ? '<span class="chip on">online</span>' : '<span class="chip off">offline</span>';
     const models = (w.models || []).join(", ") || "—";
-    return `<div class="card${isHidden ? " dim" : ""}"><h3>${esc(w.name)}</h3>
+    return `<div class="card${isHidden ? " dim" : ""}" data-w="${esc(w.name)}"><h3>${esc(w.name)}</h3>
       <div class="chips">${badge}<span class="chip">${esc(w.type || "")}</span>${isHidden ? '<span class="chip">hidden</span>' : ""}</div>
       <div class="wmeta">models: ${esc(models)}<br>den: ${esc(w.den_earned ?? 0)} · jobs: ${esc(w.jobs_completed ?? 0)}</div>
       <div class="row"><button class="btn ghost" data-wi="${i}">${isHidden ? "Unhide" : "Hide"}</button></div></div>`;
@@ -380,6 +381,24 @@ function trackJobs(line) {
   } else return;
   renderJobs();
 }
+// Overview: what the worker on this computer is doing right now.
+function renderOverviewWork(n, now) {
+  const box = $("#ovwork"); if (!box) return;
+  box.style.display = WORKER_RUNNING ? "" : "none";
+  box.className = "ovwork" + (n ? " busy" : "");
+  if (WORKER_RUNNING) {
+    $("#ovwork-t").textContent = n ? (n === 1 ? "Your worker is serving a grid job" : `Your worker is serving ${n} grid jobs`)
+      : "Your worker is running · waiting for grid jobs";
+    $("#ovwork-s").textContent = n
+      ? [...JOBS].map(([id, j]) => `${id}${j.model ? " · " + j.model : ""} · ${Math.round((now - j.t0) / 1000)} s`).join("  |  ")
+      : JOB_SESSION.n ? `${JOB_SESSION.n} served this session · +${JOB_SESSION.den.toFixed(1)} den · last: ${JOB_SESSION.last}`
+      : "Nothing served yet this session.";
+  }
+  // the card of this computer's worker in the list below
+  const mine = (get("aipg_wname") || "").trim();
+  document.querySelectorAll("#workers .card").forEach((c) =>
+    c.classList.toggle("working", !!(n && WORKER_RUNNING && mine && c.dataset.w === mine)));
+}
 function renderJobs() {
   const now = Date.now();
   for (const [id, j] of JOBS) if (now - j.t0 > 900000) JOBS.delete(id); // never show a stuck job forever
@@ -399,6 +418,7 @@ function renderJobs() {
       el.className = "jobline";
     }
   }
+  renderOverviewWork(n, now);
   if (WORKER_RUNNING) tip = n ? `AIPG Desktop: serving ${n} grid job${n === 1 ? "" : "s"}`
     : `AIPG Desktop: worker waiting for jobs` + (JOB_SESSION.n ? ` (${JOB_SESSION.n} served)` : "");
   if (tip !== TRAY_TIP && TAURI.core) { TRAY_TIP = tip; invoke("tray_status", { text: tip }).catch(() => {}); }
@@ -2068,6 +2088,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // getting a key: shown on first run, and again from the Overview banner and Settings
   wireKeyGuide();
   wireAccount();
+  $("#ovwork").onclick = () => show("worker");
   show("overview");
   startPolling();
   // a browser sign-in from an earlier run: fetch its token, then load again
