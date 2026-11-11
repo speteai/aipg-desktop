@@ -286,12 +286,15 @@ function renderEarnHistory(h) {
 
 async function loadEarnings() {
   try {
-    const d = await api("/account/jobs");
+    // The totals are the workers' counters: `total_den` of /account/jobs
+    // only sums the jobs it returns (the latest 50).
+    const [d, w] = await Promise.all([api("/account/jobs"), api("/account/workers").catch(() => null)]);
     const jobs = d.jobs || [];
+    const den = w && w.den_earned != null ? Math.round(w.den_earned * 100) / 100 : null;
     $("#estats").innerHTML = `
-      ${stat("Total den", d.total_den ?? 0, "green")}
-      ${stat("Jobs", jobs.length, "blue")}`;
-    renderEarnHistory(recordEarn(d.total_den));
+      ${stat("Total den", den ?? "—", "green", "all workers of the account")}
+      ${stat("Jobs", w ? (w.jobs_completed ?? 0) : "—", "blue", jobs.length ? `latest ${jobs.length} listed below` : "")}`;
+    renderEarnHistory(den == null ? loadEarnHist() : recordEarn(den));
     const tb = $("#jobs tbody");
     tb.innerHTML = jobs.slice(0, 50).map((j) => `<tr>
       <td>${esc(j.ts ? new Date(j.ts).toLocaleString() : (j.timestamp || "—"))}</td>
@@ -345,8 +348,8 @@ function startPolling() {
     // keep the earnings history growing in the background (at most every 30 min)
     if (Date.now() - Number(get("aipg_earn_ts") || 0) > 30 * 60000) {
       try {
-        const d = await api("/account/jobs");
-        recordEarn(d.total_den); set("aipg_earn_ts", String(Date.now()));
+        const d = await api("/account/workers");
+        recordEarn(d.den_earned); set("aipg_earn_ts", String(Date.now()));
       } catch (e) {}
     }
   };
@@ -904,26 +907,32 @@ function syncRunButtons() {
 /* crash recovery: restart an unexpectedly exited worker, at most 3× per 10 min */
 let WANT_RUNNING = false, LAST_CFG = null, RESTARTS = [], RESTART_T = null;
 function markStarted(cfg) { WORKER_RUNNING = true; WANT_RUNNING = true; LAST_CFG = cfg; jobsReset(true); }
+// A line for the worker log on screen and in the log file.
+function deskNote(msg) {
+  logLine("[desktop] " + msg);
+  if (TAURI.core) invoke("worker_note", { text: msg }).catch(() => {});
+}
+let START_REASON = "";
 function scheduleRestart() {
   const now = Date.now();
   RESTARTS = RESTARTS.filter((t) => now - t < 600000);
   if (RESTARTS.length >= 3) {
     WANT_RUNNING = false; RESTART_T = null;
-    logLine("[desktop] worker crashed 3 times within 10 minutes — not restarting again.");
+    deskNote("worker crashed 3 times within 10 minutes — not restarting again.");
     nativeNotify("Worker stopped", "It crashed repeatedly and was not restarted.");
     syncRunButtons(); wsetStatus("crashed", "off");
     return;
   }
   RESTARTS.push(now);
   const delay = 5000 * RESTARTS.length;
-  logLine(`[desktop] worker exited unexpectedly — restarting in ${delay / 1000}s (attempt ${RESTARTS.length}/3)…`);
+  deskNote(`worker exited unexpectedly — restarting in ${delay / 1000}s (attempt ${RESTARTS.length}/3)…`);
   clearTimeout(RESTART_T);
   RESTART_T = setTimeout(async () => {
     RESTART_T = null;
     if (!WANT_RUNNING) { syncRunButtons(); return; }
     try {
       await invoke("ollama_ensure");
-      await invoke("worker_start", { cfg: LAST_CFG });
+      await invoke("worker_start", { cfg: LAST_CFG, reason: `restart after an unexpected exit (attempt ${RESTARTS.length}/3)` });
       WORKER_RUNNING = true; syncRunButtons();
     } catch (e) { logLine("[restart] " + emsg(e)); scheduleRestart(); }
   }, delay);
@@ -976,7 +985,8 @@ async function autoStartWorker() {
     // 4 — run
     step = "run"; setStep("run", "active"); wprog(null, "Starting worker…");
     const cfg = { api_key, model, worker_name };
-    await invoke("worker_start", { cfg });
+    await invoke("worker_start", { cfg, reason: START_REASON || "started by the user (guided setup)" });
+    START_REASON = "";
     markStarted(cfg); RESTARTS = [];
     setStep("run", "done"); wprog(null, "Worker running ✓"); toast("Worker running");
   } catch (e) {
@@ -1108,7 +1118,8 @@ function wireWorker() {
     try {
       const cfg = { api_key, model, worker_name };
       await invoke("ollama_ensure");
-      await invoke("worker_start", { cfg });
+      await invoke("worker_start", { cfg, reason: START_REASON || "started by the user" });
+      START_REASON = "";
       markStarted(cfg); RESTARTS = []; syncRunButtons();
     } catch (e) { toast(emsg(e)); logLine("[start] " + emsg(e)); syncRunButtons(); }
   };
@@ -2428,5 +2439,6 @@ async function bootAutostart() {
   show("worker"); // populates fields + lets the user watch progress
   $("#wname2").value = get("aipg_wname") || "";
   $("#wmodel2").value = get("aipg_wmodel") || "qwen3:8b";
+  START_REASON = resume ? "resumed after an app update" : "app start (start the worker automatically is on)";
   autoStartWorker();
 }

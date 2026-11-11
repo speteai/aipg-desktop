@@ -62,6 +62,9 @@ Chat works right away — running a worker is optional and needs an API key.
   - shows live download progress (GB and %), lets you pick **where models are stored**,
     and lists installed models with their size so you can delete what you no longer need,
   - restarts the worker automatically if it crashes.
+- **Worker log and warm start** — the worker's output is kept in a log file, also on Windows where the worker has no
+  console (the app then reads it from the worker's local dashboard). Every start and stop is logged with time and
+  reason. Right after a start the model is loaded into memory, so the first grid job does not run into a timeout.
 - **Worker activity** — Overview shows a history of the worker on this computer: per hour (last 24 hours) or per day
   (last 7 days) how long it was online and how long it was actually serving grid jobs, with jobs and den. Recorded
   while the worker runs in the app and stored on this computer only.
