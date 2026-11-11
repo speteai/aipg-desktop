@@ -651,6 +651,34 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
   background:var(--acc-fill);animation:pulse 1.2s ease-in-out infinite}
 .chip.busy{color:var(--acc)}
 .chip.busy::before{animation:pulse 1.2s ease-in-out infinite}
+/* Overview: activity of the worker on this computer. A row of cells; a wave
+   runs through it while a grid job is being served. */
+.ovwork{display:flex;align-items:center;gap:var(--s4);width:100%;margin:var(--s3) 0 0;
+  padding:var(--s3) var(--s4);text-align:left;cursor:pointer;color:var(--fg);
+  background:var(--panel);border:0;border-left:2px solid var(--bd);border-radius:0;font:inherit}
+.ovwork:hover{border-left-color:var(--acc-fill)}
+.ovwork.busy{border-left-color:var(--acc-fill)}
+.ovcells{display:flex;gap:3px;flex:0 0 auto}
+.ovcells i{width:7px;height:18px;background:var(--bd-strong);transform-origin:50% 100%}
+.ovwork:not(.busy) .ovcells i:first-child{background:var(--ok);animation:pulse 2.4s ease-in-out infinite}
+.ovwork.busy .ovcells i{background:var(--acc-fill);animation:ovwave 1.2s ease-in-out infinite}
+.ovwork .ovcells i:nth-child(2){animation-delay:-.1s}.ovwork .ovcells i:nth-child(3){animation-delay:-.2s}
+.ovwork .ovcells i:nth-child(4){animation-delay:-.3s}.ovwork .ovcells i:nth-child(5){animation-delay:-.4s}
+.ovwork .ovcells i:nth-child(6){animation-delay:-.5s}.ovwork .ovcells i:nth-child(7){animation-delay:-.6s}
+.ovwork .ovcells i:nth-child(8){animation-delay:-.7s}.ovwork .ovcells i:nth-child(9){animation-delay:-.8s}
+.ovwork .ovcells i:nth-child(10){animation-delay:-.9s}.ovwork .ovcells i:nth-child(11){animation-delay:-1s}
+.ovwork .ovcells i:nth-child(12){animation-delay:-1.1s}
+@keyframes ovwave{0%,100%{transform:scaleY(.25);opacity:.35}35%{transform:scaleY(1);opacity:1}70%{transform:scaleY(.25);opacity:.35}}
+.ovtext{display:flex;flex-direction:column;min-width:0}
+.ovwork-t{font-weight:600}
+.ovwork.busy .ovwork-t{color:var(--acc)}
+.ovwork-s{color:var(--mut);font:var(--t-small)/1.5 var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card.working{border-top-color:var(--acc-fill)}
+.card.working h3::after{content:" · working";color:var(--acc);font-weight:400}
+@media (prefers-reduced-motion:reduce){
+  .ovcells i{animation:none !important}
+  .ovwork.busy .ovcells i{transform:none;opacity:1}
+}
 .navjob{display:none;align-self:center;width:7px;height:7px;margin-left:auto;background:var(--acc-fill);
   animation:pulse 1.2s ease-in-out infinite}
 .navjob.on{display:inline-block}
