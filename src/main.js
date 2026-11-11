@@ -373,6 +373,7 @@ function trackJobs(line) {
   } else if ((m = line.match(/ ([\w-]{4,8}) \| (.*\+([\d.]+) den) \| total/))) {
     JOBS.delete(m[1]);
     JOB_SESSION.n++; JOB_SESSION.den += parseFloat(m[3]) || 0;
+    usageJob(parseFloat(m[3]) || 0);
     JOB_SESSION.last = m[2].replace(/ \| /g, " · ");
   } else if ((m = line.match(/(?:No ack received for (?:raw )?job|ReadTimeout for job|produced 0 tokens for job) ([\w-]{4,8})/))) {
     JOBS.delete(m[1]);
@@ -380,6 +381,110 @@ function trackJobs(line) {
     JOBS.clear();
   } else return;
   renderJobs();
+}
+/* ---------- worker activity history (local, this computer) ----------
+   One bucket per clock hour: r = seconds the worker ran, b = seconds it was
+   serving at least one grid job, j = jobs finished, d = den earned.
+   Time is added between two calls with the state that held in between, so a
+   job of a few seconds counts exactly. Kept for 8 days, on this device only. */
+const USE_H = 3600000;
+let USE = null, USE_LAST = 0, USE_RUN = false, USE_BUSY = false, USE_SAVED = 0, USE_DIRTY = false;
+let USE_RANGE = get("aipg_usage_range") === "7d" ? "7d" : "24h";
+function useLoad() {
+  if (!USE) {
+    try { USE = JSON.parse(get("aipg_usage") || "{}"); } catch (e) { USE = {}; }
+    if (!USE || typeof USE !== "object" || Array.isArray(USE)) USE = {};
+  }
+  return USE;
+}
+function useBucket(h) { return USE[h] || (USE[h] = { r: 0, b: 0, j: 0, d: 0 }); }
+function useAdd(t0, t1, f) {
+  while (t0 < t1) {
+    const h = Math.floor(t0 / USE_H), end = Math.min(t1, (h + 1) * USE_H);
+    useBucket(h)[f] += (end - t0) / 1000; t0 = end;
+  }
+}
+function usageSave() {
+  const min = Math.floor(Date.now() / USE_H) - 24 * 8, out = {};
+  for (const k of Object.keys(USE)) {
+    if (Number(k) < min) { delete USE[k]; continue; }
+    const b = USE[k];
+    out[k] = { r: Math.round(b.r * 10) / 10, b: Math.round(b.b * 10) / 10, j: b.j, d: Math.round(b.d * 100) / 100 };
+  }
+  set("aipg_usage", JSON.stringify(out));
+  USE_SAVED = Date.now(); USE_DIRTY = false;
+}
+function usageAccrue(force) {
+  const now = Date.now(); useLoad();
+  // a gap of more than five minutes means the computer slept: do not count it
+  if (USE_LAST && now > USE_LAST && now - USE_LAST < 300000 && USE_RUN) {
+    useAdd(USE_LAST, now, "r");
+    if (USE_BUSY) useAdd(USE_LAST, now, "b");
+    USE_DIRTY = true;
+  }
+  USE_LAST = now; USE_RUN = WORKER_RUNNING; USE_BUSY = WORKER_RUNNING && JOBS.size > 0;
+  if (USE_DIRTY && (force || now - USE_SAVED > 30000)) { usageSave(); renderUsage(); }
+}
+function usageJob(den) {
+  useLoad(); const b = useBucket(Math.floor(Date.now() / USE_H));
+  b.j++; b.d += den || 0; USE_DIRTY = true;
+  usageAccrue(true);
+}
+function useDur(s) {
+  if (s < 60) return Math.round(s) + " s";
+  if (s < 3600) return Math.round(s / 60) + " min";
+  return (s / 3600).toFixed(1) + " h";
+}
+function useText(x) {
+  if (!x.r && !x.j) return "worker not running";
+  const pct = x.r ? Math.round(x.b / x.r * 100) : 0;
+  return `online ${useDur(x.r)} · serving ${useDur(x.b)} (${x.b && pct < 1 ? "<1" : pct} % of online time) · ` +
+    `${x.j} job${x.j === 1 ? "" : "s"} · +${x.d.toFixed(1)} den`;
+}
+function renderUsage() {
+  const box = $("#usechart"); if (!box) return;
+  if (!$("#view-overview").classList.contains("active")) return;
+  useLoad();
+  document.querySelectorAll(".usebtn").forEach((b) => b.classList.toggle("on", b.dataset.r === USE_RANGE));
+  const nowH = Math.floor(Date.now() / USE_H), cols = [];
+  if (USE_RANGE === "24h") {
+    for (let h = nowH - 23; h <= nowH; h++) {
+      const b = USE[h] || { r: 0, b: 0, j: 0, d: 0 }, t = new Date(h * USE_H);
+      const hh = String(t.getHours()).padStart(2, "0");
+      cols.push({ ...b, cap: 3600, name: `${hh}:00–${hh}:59`, tick: (nowH - h) % 6 === 5 ? hh + ":00" : h === nowH ? "now" : "" });
+    }
+  } else {
+    const days = new Map();
+    const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(d0); d.setDate(d.getDate() - i);
+      days.set(d.toDateString(), { r: 0, b: 0, j: 0, d: 0, cap: 86400,
+        name: d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" }),
+        tick: i ? d.toLocaleDateString(undefined, { weekday: "short" }) : "today" });
+    }
+    for (const k of Object.keys(USE)) {
+      const day = days.get(new Date(Number(k) * USE_H).toDateString()); if (!day) continue;
+      const b = USE[k]; day.r += b.r; day.b += b.b; day.j += b.j; day.d += b.d;
+    }
+    cols.push(...days.values());
+  }
+  const sum = cols.reduce((a, c) => ({ r: a.r + c.r, b: a.b + c.b, j: a.j + c.j, d: a.d + c.d }), { r: 0, b: 0, j: 0, d: 0 });
+  const pc = (v, cap) => Math.min(100, v / cap * 100).toFixed(1);
+  box.className = "usechart r" + USE_RANGE;
+  box.innerHTML = cols.map((c, i) =>
+    `<div class="usecol" data-i="${i}" tabindex="0" aria-label="${esc(c.name + ": " + useText(c))}">` +
+    `<div class="usetrack">${c.r ? `<i class="u-on" style="height:${pc(c.r, c.cap)}%"></i>` : ""}` +
+    `${c.b ? `<i class="u-busy" style="height:${pc(c.b, c.cap)}%"></i>` : ""}</div>` +
+    `<span class="usetick">${esc(c.tick)}</span></div>`).join("");
+  const label = USE_RANGE === "24h" ? "Last 24 hours" : "Last 7 days";
+  const total = sum.r || sum.j ? `${label}: ${useText(sum)}`
+    : `${label}: nothing recorded yet. The history fills while the worker runs in this app; it is stored on this computer only.`;
+  const out = $("#usesum"); out.textContent = total;
+  box.querySelectorAll(".usecol").forEach((el) => {
+    const c = cols[Number(el.dataset.i)];
+    const on = () => { out.textContent = `${c.name}: ${useText(c)}`; }, off = () => { out.textContent = total; };
+    el.onmouseenter = on; el.onfocus = on; el.onmouseleave = off; el.onblur = off;
+  });
 }
 // Overview: what the worker on this computer is doing right now.
 function renderOverviewWork(n, now) {
@@ -402,6 +507,7 @@ function renderOverviewWork(n, now) {
 function renderJobs() {
   const now = Date.now();
   for (const [id, j] of JOBS) if (now - j.t0 > 900000) JOBS.delete(id); // never show a stuck job forever
+  usageAccrue();
   const n = JOBS.size, el = $("#wjob"), nav = $("#navjob");
   if (nav) nav.className = "navjob" + (n ? " on" : "");
   let tip = "AIPG Desktop";
@@ -1836,7 +1942,7 @@ async function checkNewModels() {
 function show(view) {
   $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
-  if (view === "overview") loadOverview();
+  if (view === "overview") { loadOverview(); renderUsage(); }
   if (view === "chat") loadChat();
   if (view === "images") loadImages();
   if (view === "worker") loadWorker();
@@ -2089,6 +2195,12 @@ document.addEventListener("DOMContentLoaded", () => {
   wireKeyGuide();
   wireAccount();
   $("#ovwork").onclick = () => show("worker");
+  document.querySelectorAll(".usebtn").forEach((b) => (b.onclick = () => {
+    USE_RANGE = b.dataset.r; set("aipg_usage_range", USE_RANGE); renderUsage();
+  }));
+  setInterval(() => usageAccrue(), 30000);
+  setInterval(renderUsage, 300000);
+  window.addEventListener("pagehide", () => usageAccrue(true));
   show("overview");
   startPolling();
   // a browser sign-in from an earlier run: fetch its token, then load again
