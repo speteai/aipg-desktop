@@ -115,6 +115,14 @@ such a computer can learn or do:
   marked as third-party content whose instructions must not be followed. The app shows
   answers as plain text and never runs anything from them.
 
+- **Cross-check.** Under every grid reply in the chat, *Cross-check* asks a different
+  model the same question without showing it the first answer, has the two answers
+  compared and shows whether they agree, where they differ and, as far as the grid shows
+  it, which workers served them. *Cross-check* in the chat bar does this for every reply.
+  It costs two extra requests. Agreement is not proof (two models can share a mistake,
+  and the comparison is itself made by a model), but a single worker returning a wrong
+  or manipulated answer no longer passes unnoticed.
+
 The grid offers no encryption and no choice of worker, so a worker always sees the
 (masked) prompt and can return a wrong answer.
 
