@@ -1080,7 +1080,11 @@ async fn grid_balance(ctx: &Ctx) -> Result<Vec<Value>, String> {
             usd(&free["remaining_usd"]),
             usd(&free["daily_cap_usd"]),
             if free["active"] == false { " — display only, not spendable yet" } else { "" },
-            if free["holder_bonus_active"] == true { " — holder bonus active" } else { "" },
+            match free["holder_bonus_usd"].as_f64() {
+                Some(b) if b > 0.0 => format!(" — includes {} for holding AIPG", money(b)),
+                _ if free["holder_bonus_active"] == true => " — holder bonus active".to_string(),
+                _ => String::new(),
+            },
         ));
     }
     if c["promotional"].is_object() {

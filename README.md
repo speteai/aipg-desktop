@@ -65,7 +65,7 @@ Chat works right away — running a worker is optional and needs an API key.
 - **Worker activity** — Overview shows a history of the worker on this computer: per hour (last 24 hours) or per day
   (last 7 days) how long it was online and how long it was actually serving grid jobs, with jobs and den. Recorded
   while the worker runs in the app and stored on this computer only.
-- **Overview / Models / Earnings** — spendable balance with today's free allowance, workers online (retired workers
+- **Overview / Models / Earnings** — spendable balance with today's free allowance (and what holding AIPG adds to it), workers online (retired workers
   can be hidden), den earned and jobs; live model list with prices; recent jobs plus a **local earnings-history graph**.
 - **Network** — a live diagram of the grid: which workers are online, which models they
   serve, who handled the latest jobs. (The grid publishes no worker locations, so it is a
