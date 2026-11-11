@@ -333,25 +333,72 @@ async fn credit_line(ctx: &Ctx) -> String {
 }
 
 /// Which worker served a finished request, if the public job feed shows it.
-async fn served_by(ctx: &Ctx, response_id: &str) -> String {
-    let id = response_id.trim_start_matches("chatcmpl-");
-    if id.len() < 8 {
-        return String::new();
+/// Seconds since 1970 for a timestamp like `2026-11-11T21:10:40.16+00:00`
+/// (the grid writes UTC). Days-from-civil after H. Hinnant.
+fn iso_epoch(s: &str) -> Option<f64> {
+    let n = |a: usize, z: usize| s.get(a..z)?.parse::<i64>().ok();
+    let (y, m, d, h, mi, se) = (n(0, 4)?, n(5, 7)?, n(8, 10)?, n(11, 13)?, n(14, 16)?, n(17, 19)?);
+    let y = if m <= 2 { y - 1 } else { y };
+    let (era, yoe) = (y.div_euclid(400), y.rem_euclid(400));
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(((era * 146_097 + doe - 719_468) * 86_400 + h * 3600 + mi * 60 + se) as f64)
+}
+
+fn epoch_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+/// The job in the public feed that belongs to a finished request. The grid
+/// does not return a job id, so it is found by model, time and size; only an
+/// unambiguous match counts. A worker reports slightly fewer units than the
+/// grid bills as output tokens.
+fn match_job<'a>(jobs: &'a [Value], model: &str, out_tokens: Option<u64>, t0: f64, t1: f64) -> Option<&'a Value> {
+    let mut hits = jobs.iter().filter(|j| {
+        let when = j["created"].as_str().and_then(iso_epoch);
+        let size = match (out_tokens, j["output_units"].as_f64()) {
+            (Some(t), Some(u)) => u <= t as f64 && u >= t as f64 * 0.75,
+            _ => true,
+        };
+        j["type"].as_str().unwrap_or("text") == "text"
+            && j["model"].as_str().map(norm).as_deref() == Some(norm(model).as_str())
+            && when.map(|c| c >= t0 - 3.0 && c <= t1 + 10.0).unwrap_or(false)
+            && size
+    });
+    let first = hits.next()?;
+    if hits.next().is_some() { None } else { Some(first) }
+}
+
+async fn served_by(ctx: &Ctx, model: &str, out_tokens: Option<u64>, t0: f64, t1: f64) -> String {
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(1500)).await; // the feed can lag a moment
+        }
+        let Ok(feed) = get_json(ctx, "/jobs/recent?limit=50", false).await else { return String::new() };
+        let jobs = feed["jobs"].as_array().cloned().unwrap_or_default();
+        let Some(job) = match_job(&jobs, model, out_tokens, t0, t1) else { continue };
+        let Some(worker) = job["worker"].as_str() else { return String::new() };
+        let own = get_json(ctx, "/account/workers", true)
+            .await
+            .ok()
+            .and_then(|w| w["workers"].as_array().cloned())
+            .map(|a| a.iter().any(|x| x["name"].as_str() == Some(worker)))
+            .unwrap_or(false);
+        let mut s = format!(" · served by worker {worker}{}", if own { " (the user's own worker)" } else { "" });
+        let id: String = job["job_id"].as_str().unwrap_or("").chars().take(8).collect();
+        if !id.is_empty() {
+            s.push_str(&format!(", job {id}"));
+        }
+        if let Some(d) = job["duration_s"].as_f64() {
+            s.push_str(&format!(", {d:.1} s on the worker"));
+        }
+        s.push_str(" (found in the public job feed by model, time and size)");
+        return s;
     }
-    let Ok(feed) = get_json(ctx, "/jobs/recent?limit=50", false).await else { return String::new() };
-    let Some(job) = feed["jobs"].as_array().and_then(|a| {
-        a.iter().find(|j| j["job_id"].as_str().map(|x| x == id || x.starts_with(id) || id.starts_with(x)).unwrap_or(false))
-    }) else {
-        return String::new();
-    };
-    let Some(worker) = job["worker"].as_str() else { return String::new() };
-    let own = get_json(ctx, "/account/workers", true)
-        .await
-        .ok()
-        .and_then(|w| w["workers"].as_array().cloned())
-        .map(|a| a.iter().any(|x| x["name"].as_str() == Some(worker)))
-        .unwrap_or(false);
-    format!(" · served by worker {worker}{}", if own { " (the user's own worker)" } else { "" })
+    String::new()
 }
 
 /// Entry point for `--mcp`. Blocks until stdin closes.
@@ -690,6 +737,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     let before = if model == "auto" { worst_text_rates(&models) } else { text_rates(&models, &model) };
     let reserved = ctx.reserve(before.map(|r| text_cost(r, input_est, max_tokens)))?;
     let credit_before = spendable(ctx).await;
+    let (sent_at, clock) = (epoch_now(), std::time::Instant::now());
 
     let mut messages = Vec::new();
     if let Some(sys) = system {
@@ -731,6 +779,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         Err(err) => return Err(settle_failed(ctx, reserved, credit_before, err).await),
     };
 
+    let took = clock.elapsed().as_secs_f64();
     let choice = &d["choices"][0];
     let msg = &choice["message"];
     let answer = mask.restore(msg["content"].as_str().map(str::trim).unwrap_or(""));
@@ -759,9 +808,8 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         note.push_str(&format!(" · max_tokens raised from {a} to {MIN_ANSWER_TOKENS} so that a model that thinks first still has room to answer"));
     }
     note.push_str(&privacy_note);
-    if let Some(id) = d["id"].as_str() {
-        note.push_str(&served_by(ctx, id).await);
-    }
+    note.push_str(&format!(" · answered in {took:.1} s"));
+    note.push_str(&served_by(ctx, &used, tokens.1, sent_at, sent_at + took).await);
     let credit = credit_line(ctx).await;
     if !credit.is_empty() {
         note.push_str(" · ");
@@ -771,7 +819,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         let finish = choice["finish_reason"].as_str().unwrap_or("unknown");
         let thought = msg["reasoning_content"].as_str().or_else(|| msg["reasoning"].as_str()).map(str::len).unwrap_or(0);
         return Err(format!(
-            "The grid model returned no visible answer (finish reason: {finish}{}). The request was still billed. [{note}] Do not simply retry: set reasoning to \"off\", raise max_tokens, or pick another model.",
+            "The grid model returned no visible answer (finish reason: {finish}{}). The request was still billed. [{note}] Do not simply retry: raise max_tokens or pick another model. Setting reasoning to \"off\" does not stop every model from thinking (qwen3 on Ollama thinks regardless).",
             if thought > 0 { format!(", {thought} characters of hidden reasoning") } else { String::new() }
         ));
     }
@@ -844,7 +892,16 @@ async fn grid_quote(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     let mut lines = Vec::new();
     let mut form = json!({ "model": model, "modality": modality });
     if modality == "text" {
-        let input = args["prompt_tokens"].as_u64().unwrap_or_else(|| args["prompt"].as_str().map(approx_tokens).unwrap_or(0));
+        // estimate what grid_chat would send: private values become
+        // placeholders and a note about them is added
+        let input = args["prompt_tokens"].as_u64().unwrap_or_else(|| {
+            let prompt = args["prompt"].as_str().unwrap_or("");
+            if ctx.protect() == "mask" && !privacy::find(prompt).is_empty() {
+                approx_tokens(&privacy::Mask::default().apply(prompt)) + approx_tokens(privacy::PLACEHOLDER_NOTE)
+            } else {
+                approx_tokens(prompt)
+            }
+        });
         let max_tokens = answer_budget(args["max_tokens"].as_u64());
         form["prompt_tokens"] = json!(input);
         form["max_tokens"] = json!(max_tokens);
@@ -873,6 +930,9 @@ async fn grid_quote(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     if let Some(limit) = ctx.daily_limit() {
         let (spent, _) = spend_today(&ctx.data_dir());
         lines.push(format!("Daily limit for assistants: {} used of {}.", money(spent), money(limit)));
+    }
+    if modality == "text" {
+        lines.push("The input count is an estimate from the text length. The model's own chat template is billed on top (about 10 to 70 tokens, depending on the model).".into());
     }
     lines.push("Nothing was generated or billed.".into());
     Ok(vec![text(lines.join("\n"))])
@@ -957,7 +1017,7 @@ async fn grid_worker_status(ctx: &Ctx) -> Result<Vec<Value>, String> {
                 ["error", "fail", "timeout", "unreachable", "offline", "no ack", "traceback", "crash", "exited", "lost"].iter().any(|k| l.contains(k))
             };
             let errors: Vec<&str> = all.iter().copied().filter(|l| bad(l)).collect();
-            lines.push(format!("Worker log of AIPG Desktop on this computer ({} lines):", all.len()));
+            lines.push(format!("Worker log of AIPG Desktop on this computer ({} lines in the file; the last 8 are shown):", all.len()));
             if errors.is_empty() {
                 lines.push("  no error lines".into());
             } else {
