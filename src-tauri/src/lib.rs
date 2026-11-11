@@ -5,6 +5,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+mod account;
+mod auth;
 mod connector;
 mod job;
 mod mcp;
@@ -145,6 +147,11 @@ pub fn run() {
             connector::connector_status,
             connector::connector_enable,
             connector::connector_disable,
+            account::auth_status,
+            account::auth_signin,
+            account::auth_cancel,
+            account::auth_token,
+            account::auth_signout,
             connector::connector_limit_set,
             connector::connector_protect_set,
             connector::connector_claude_add,

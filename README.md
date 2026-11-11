@@ -32,8 +32,8 @@ OS may warn you ("unknown publisher" / Gatekeeper). Choose *Run anyway* / right-
 *Open*. The full source and build pipeline are public here, so you can verify or build it
 yourself.
 
-On first run, paste your `grid_…` API key (from the AIPG Console). Chat works right away —
-running a worker is optional.
+On first run, sign in with your browser, or paste a `grid_…` API key from the AIPG Console.
+Chat works right away — running a worker is optional and needs an API key.
 
 ## Features
 
@@ -86,6 +86,14 @@ running a worker is optional.
   in one click. Updates are signature-verified against a key baked into the app.
   (On Linux this works for the AppImage; `.deb`/`.rpm` users update via a new package.)
 
+## Signing in
+
+**Sign in with your browser** opens the AIPG Console, where you approve the app; there is
+no key to copy. The app receives a token that lasts 15 minutes and renews it by itself. The
+grid ends a sign-in after 30 days without use or 180 days at the latest, and you can end it
+yourself under Settings → Sign out. This covers chat, images, your credit and the connector.
+Running a worker needs an API key, because the worker program only accepts a key.
+
 ## Getting an API key
 
 On first start the app walks you through it: open the
@@ -113,6 +121,8 @@ The grid offers no encryption and no choice of worker, so a worker always sees t
 ## Security & privacy
 
 - Your API key is stored **locally** and sent only to `api.aipowergrid.io`.
+- A browser sign-in is stored in a file in the app's data folder (owner-readable only on
+  Linux/macOS). During sign-in the app listens on `127.0.0.1` only, for at most five minutes.
 - If you enable the connector, the key is also written to a file in the app's data folder
   (owner-readable only on Linux/macOS) so the connector process can use it; disabling the
   connector removes the key from that file.
