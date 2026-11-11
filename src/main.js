@@ -154,7 +154,23 @@ function freeNote(f) {
   const h = (new Date().setUTCHours(24, 0, 0, 0) - Date.now()) / 3600000;
   const reset = h < 1 ? `resets in ${Math.max(1, Math.round(h * 60))} min` : `resets in ${Math.round(h)} h`;
   // the grid grants the allowance only to accounts with a verified Google sign-in
-  return [reset, f.active === false ? "not spendable: needs a Google sign-in on the account" : "", f.holder_bonus_active ? "holder bonus" : ""].filter(Boolean).join(" · ");
+  return [reset, f.active === false ? "not spendable: needs a Google sign-in on the account" : "", holderNote(f)].filter(Boolean).join(" · ");
+}
+/* Extra daily allowance for accounts whose sign-in wallet holds AIPG on Base.
+   The grid reports the tiers and the amount granted; nothing is computed here. */
+function holderNote(f) {
+  const usd = (n) => "$" + Number(n).toFixed(2);
+  const bonus = Number(f.holder_bonus_usd) || 0;
+  if (bonus > 0) return `includes ${usd(bonus)} for holding AIPG`;
+  const tiers = (Array.isArray(f.holder_tiers) ? f.holder_tiers : [])
+    .map((t) => ({ min: Number(t && t.min_aipg), usd: Number(t && t.daily_usd) }))
+    .filter((t) => t.min > 0 && t.usd > 0).sort((a, b) => a.min - b.min);
+  if (!tiers.length) return f.holder_bonus_active ? "holder bonus" : "";
+  const most = Math.max(...tiers.map((t) => t.usd));
+  const amount = most > tiers[0].usd ? `${usd(tiers[0].usd)} to ${usd(most)}` : usd(tiers[0].usd);
+  const all = tiers.map((t) => `${t.min.toLocaleString("en-US")} AIPG: ${usd(t.usd)} a day`).join(" · ");
+  return `<span title="${esc(all)}. Counted from the UTC day after the tokens arrive.">` +
+    `hold ${tiers[0].min.toLocaleString("en-US")}+ AIPG in your sign-in wallet for ${amount} more a day</span>`;
 }
 function creditNote(c) {
   const parts = [];
