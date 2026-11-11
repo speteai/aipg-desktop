@@ -27,8 +27,8 @@
     <section class="view active" id="view-overview">
       <header class="vh"><h1>Overview</h1><button class="btn" id="refresh">Refresh</button></header>
       <div id="needkey" class="banner" style="display:none">
-        No API key yet. With a key you can chat on the grid, generate images, see your credit and run a worker.
-        <button class="btn primary" id="needkey-go" style="margin-left:8px">Get a key</button>
+        Not connected yet. Sign in with your browser or add an API key to chat on the grid, generate images and see your credit.
+        <button class="btn primary" id="needkey-go" style="margin-left:8px">Connect</button>
       </div>
       <div class="stats" id="stats"></div>
       <div class="vh" style="margin-top:22px">
@@ -316,7 +316,8 @@
             <button class="btn primary" id="cn-enable">Enable connector</button>
             <button class="btn ghost" id="cn-disable" style="display:none">Disable</button>
           </div>
-          <p class="hint">Enabling stores your API key in a file in this app's data folder so the connector can use it.
+          <p class="hint">With an API key, enabling stores the key in a file in this app's data folder so the connector can use it;
+            with the browser sign-in, the connector uses that sign-in instead.
             Whatever the assistant sends to the grid is billed to your account (your daily free allowance is used first when active).</p>
         </div>
         <div id="cn-clients" style="display:none">
@@ -375,6 +376,18 @@
     <!-- SETTINGS -->
     <section class="view" id="view-settings">
       <header class="vh"><h1>Settings</h1></header>
+      <div class="field" id="field-account">
+        <label>Account</label>
+        <div class="row">
+          <span id="acct-state" class="muted" style="align-self:center">Not signed in</span>
+          <button class="btn primary" id="acct-signin">Sign in with your browser</button>
+          <button class="btn ghost" id="acct-cancel" style="display:none">Cancel</button>
+          <button class="btn ghost" id="acct-signout" style="display:none">Sign out</button>
+        </div>
+        <p class="hint">Opens the AIPG Console in your browser, where you approve this app; there is no key to copy.
+          Enough for chat, images, your credit and the connector. The app stays signed in for up to 180 days
+          (30 days without use). Running a worker needs an API key.</p>
+      </div>
       <div class="field">
         <label>Grid API key</label>
         <div class="row">
@@ -467,8 +480,13 @@
   <div id="welcome" class="overlay" style="display:none">
     <div class="card welcomecard">
       <div class="brand" style="padding:0 0 6px"><img src="aipg-logo.png" alt="" class="logo"> Welcome to AIPG Desktop</div>
-      <p class="muted">The app needs a Grid API key for chat, images, your credit and running a worker.
-        It is free to create and takes a minute.</p>
+      <p class="muted">Connect the app to your AIPG account for chat, images and your credit.
+        An account is free and takes a minute.</p>
+      <div id="wc-signin-box" class="wcsignin">
+        <button class="btn primary" id="wc-signin">Sign in with your browser</button>
+        <p class="hint">The quickest way: approve this app in the AIPG Console, nothing to copy.</p>
+      </div>
+      <p class="muted wcor">Or use an API key. You need one to run a worker:</p>
       <ol class="wcsteps">
         <li><b>Open the AIPG Console</b> and sign in, or create an account there.
           <div class="row"><button class="btn" id="wc-open" data-ext="https://console.aipowergrid.io/dashboard/api-key">Open the key page →</button></div></li>
@@ -482,7 +500,7 @@
         <button class="btn ghost" id="wc-skip">Not now</button>
         <button class="btn primary" id="wc-save">Check &amp; save</button>
       </div>
-      <p class="hint">Without a key you can still look at the network and the model list, and chat with a
+      <p class="hint">Without an account you can still look at the network and the model list, and chat with a
         model on your own computer.</p>
     </div>
   </div>

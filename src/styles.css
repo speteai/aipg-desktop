@@ -535,6 +535,10 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .wcsteps{margin:var(--s3) 0 var(--s2);padding-left:1.3em;display:flex;flex-direction:column;gap:var(--s3);
   font-size:var(--t-small);line-height:1.5}
 .wcsteps .row{display:flex;margin-top:var(--s2)}
+.wcsignin{margin:var(--s3) 0 var(--s2)}
+.wcsignin .btn{width:100%}
+.wcsignin .hint{margin-top:var(--s2)}
+.wcor{margin-top:var(--s4);font-size:var(--t-small)}
 .wcsteps input{flex:1;min-width:0}
 #wc-msg.bad{color:var(--warn,#e0a030)}
 #wc-msg.good{color:var(--ok)}

@@ -44,10 +44,40 @@ function openExternal(url) {
 }
 
 /* ---------- API ---------- */
-function apiKey() { return (get(LS.key) || "").trim(); }
+// Two ways to be connected: a Grid API key, or a sign-in through the browser.
+// The sign-in yields a token that lasts 15 minutes; the app renews it and keeps
+// the current one here. A saved key is used first.
+let OAUTH_TOKEN = "", SIGNED_IN = false, SIGNING = false, AUTH_AT = 0;
+function gridKey() { return (get(LS.key) || "").trim(); }
+function apiKey() { return gridKey() || OAUTH_TOKEN; }
+async function refreshAuth() {
+  if (!TAURI.core) return;
+  AUTH_AT = Date.now();
+  try {
+    const t = await invoke("auth_token");
+    OAUTH_TOKEN = t || ""; SIGNED_IN = !!t;
+  } catch (e) {
+    // not renewed: either the session is over, or the grid is out of reach
+    OAUTH_TOKEN = "";
+    const was = SIGNED_IN;
+    try { SIGNED_IN = !!(await invoke("auth_status")).signed_in; } catch (e2) { SIGNED_IN = false; }
+    if (was && !SIGNED_IN) toast(emsg(e));
+  }
+  renderAccount();
+}
+// Call before a grid request: makes sure the token is not about to run out.
+async function authFresh() {
+  if (!gridKey() && SIGNED_IN && Date.now() - AUTH_AT > 120000) await refreshAuth();
+}
+function needConnection() { toast("Sign in or save an API key in Settings first"); show("settings"); }
+function needWorkerKey() {
+  toast(SIGNED_IN ? "Running a worker needs a Grid API key — the browser sign-in is not enough for it" : "Save your API key in Settings first");
+  show("settings");
+}
 async function api(path, auth = true) {
   const headers = { "Accept": "application/json" };
   if (auth) {
+    await authFresh();
     const k = apiKey();
     if (!k) throw new Error("no-key");
     headers["Authorization"] = "Bearer " + k;
@@ -110,7 +140,7 @@ async function loadOverview() {
     checkTransitions(w.workers || []);
   } catch (e) {
     if (e.message === "no-key") return;
-    setConn("err", e.status === 401 ? "bad API key" : "error");
+    setConn("err", e.status === 401 ? (gridKey() ? "bad API key" : "sign-in rejected") : "error");
     toast(e.message);
   }
 }
@@ -123,7 +153,8 @@ function stat(k, v, cls, note) {
 function freeNote(f) {
   const h = (new Date().setUTCHours(24, 0, 0, 0) - Date.now()) / 3600000;
   const reset = h < 1 ? `resets in ${Math.max(1, Math.round(h * 60))} min` : `resets in ${Math.round(h)} h`;
-  return [reset, f.active === false ? "not spendable yet" : "", f.holder_bonus_active ? "holder bonus" : ""].filter(Boolean).join(" · ");
+  // the grid grants the allowance only to accounts with a verified Google sign-in
+  return [reset, f.active === false ? "not spendable: needs a Google sign-in on the account" : "", f.holder_bonus_active ? "holder bonus" : ""].filter(Boolean).join(" · ");
 }
 function creditNote(c) {
   const parts = [];
@@ -185,9 +216,10 @@ async function loadModels() {
       return `<div class="card"><h3>${esc(m.id)}</h3><div class="chips">${chips || '<span class="chip">—</span>'}</div>${price}</div>`;
     }).join("");
   } catch (e) { $("#models").innerHTML = `<p class="muted">Could not load models: ${esc(e.message)}</p>`; }
-  // image models (need key; discovered via error)
+  // image models (need an account; discovered via error)
+  await authFresh();
   const k = apiKey();
-  if (!k) { $("#imgmodels").innerHTML = '<p class="muted">Add an API key to list image models.</p>'; return; }
+  if (!k) { $("#imgmodels").innerHTML = '<p class="muted">Sign in or add an API key to list image models.</p>'; return; }
   try {
     const r = await fetch(API + "/images/generations", {
       method: "POST", headers: { "Authorization": "Bearer " + k, "Content-Type": "application/json" },
@@ -253,7 +285,7 @@ async function loadEarnings() {
   } catch (e) {
     $("#estats").innerHTML = "";
     renderEarnHistory(loadEarnHist());
-    $("#jobs tbody").innerHTML = `<tr><td colspan="6" class="muted">${e.message === "no-key" ? "Add an API key in Settings." : esc(e.message)}</td></tr>`;
+    $("#jobs tbody").innerHTML = `<tr><td colspan="6" class="muted">${e.message === "no-key" ? "Sign in or add an API key in Settings." : esc(e.message)}</td></tr>`;
   }
 }
 
@@ -764,8 +796,8 @@ async function stopWorker() {
 }
 
 async function autoStartWorker() {
-  const api_key = apiKey();
-  if (!api_key) { toast("Save your API key in Settings first"); return show("settings"); }
+  const api_key = gridKey();
+  if (!api_key) return needWorkerKey();
   const worker_name = $("#wname2").value.trim();
   const model = $("#wmodel2").value.trim() || "qwen3:8b";
   set("aipg_wname", worker_name); set("aipg_wmodel", model);
@@ -925,8 +957,8 @@ function wireWorker() {
   $("#btn-models-dir-reset").onclick = resetModelsDir;
 
   $("#btn-start").onclick = async () => {
-    const api_key = apiKey();
-    if (!api_key) { toast("Save your API key in Settings first"); return show("settings"); }
+    const api_key = gridKey();
+    if (!api_key) return needWorkerKey();
     const model = $("#wmodel").value.trim();
     const worker_name = $("#wname").value.trim();
     set("aipg_wname", worker_name); set("aipg_wmodel", model);
@@ -1117,7 +1149,7 @@ async function simpleComplete(src, model, prompt) {
   const sm = src === "grid" && protectMode() !== "off" ? Privacy.makeMask() : null;
   const url = (src === "grid" ? API : OLLAMA_LOCAL) + "/chat/completions";
   const headers = { "Content-Type": "application/json" };
-  if (src === "grid") headers["Authorization"] = "Bearer " + apiKey();
+  if (src === "grid") { await authFresh(); headers["Authorization"] = "Bearer " + apiKey(); }
   const r = await fetch(url, {
     method: "POST", headers,
     body: JSON.stringify({ model, messages: [{ role: "user", content: sm ? sm.apply(prompt) : prompt }], stream: false, max_tokens: 400 }),
@@ -1263,7 +1295,7 @@ async function chatSend() {
   const text = [typed, ...docs.map((d) => `[Attached file: ${d.name}]\n\`\`\`\n${d.text}\n\`\`\``)].filter(Boolean).join("\n\n")
     || "Describe the attached image.";
   const src = chatSource(), model = $("#chatmodel").value;
-  if (src === "grid" && !apiKey()) { toast("Save your API key in Settings first"); return show("settings"); }
+  if (src === "grid") { await authFresh(); if (!apiKey()) return needConnection(); }
   if (src === "local" && !model) { toast("No local model — pull one under “Run a worker”"); return; }
   if (c.localOnly && src !== "local") { toast("This chat is “Local only” — it cannot be sent to the grid"); return; }
   // Before anything is shown or stored: may this text go to the grid as it is?
@@ -1429,7 +1461,8 @@ function imgBusy(on) {
 }
 
 async function imgGenerate() {
-  const key = apiKey(); if (!key) { toast("Save your API key in Settings first"); return show("settings"); }
+  await authFresh();
+  const key = apiKey(); if (!key) return needConnection();
   const model = $("#imgmodel").value; if (!model) { toast("No image model available"); return; }
   const prompt = $("#imgprompt").value.trim(); if (!prompt) { toast("Enter a prompt"); return; }
   if (protectMode() !== "off") {
@@ -1754,7 +1787,7 @@ async function copyText(txt, okMsg) {
   catch (e) { toast("Could not copy; select the text manually"); }
 }
 function renderConnect(st) {
-  $("#cn-state").textContent = st.enabled ? "enabled" : "off";
+  $("#cn-state").textContent = st.enabled ? (st.via === "signin" ? "enabled · browser sign-in" : "enabled · API key") : "off";
   $("#cn-state").className = "chip" + (st.enabled ? " on" : "");
   $("#cn-enable").style.display = st.enabled ? "none" : "";
   $("#cn-disable").style.display = st.enabled ? "" : "none";
@@ -1785,8 +1818,8 @@ async function loadConnect() {
       loadConnect();
     };
     $("#cn-enable").onclick = () => {
-      if (!apiKey()) { toast("Save your API key in Settings first"); return show("settings"); }
-      run("connector_enable", { apiKey: apiKey() }, "Connector enabled");
+      if (!gridKey() && !SIGNED_IN) return needConnection();
+      run("connector_enable", { apiKey: gridKey() }, "Connector enabled");
     };
     $("#cn-disable").onclick = async () => {
       if (!(await askConfirm("Turn the connector off? Its stored key and the Claude Desktop entry are removed.", "Disable connector", false))) return;
@@ -1814,7 +1847,7 @@ async function syncConnectorKey() {
   try {
     const st = await invoke("connector_status");
     if (!st.enabled) return;
-    if (apiKey()) await invoke("connector_enable", { apiKey: apiKey() });
+    if (gridKey() || SIGNED_IN) await invoke("connector_enable", { apiKey: gridKey() });
     else await invoke("connector_disable");
   } catch (e) {}
 }
@@ -1877,10 +1910,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // getting a key: shown on first run, and again from the Overview banner and Settings
   wireKeyGuide();
-  if (!apiKey() && get("aipg_onboarded") !== "1") openKeyGuide();
-
+  wireAccount();
   show("overview");
   startPolling();
+  // a browser sign-in from an earlier run: fetch its token, then load again
+  refreshAuth().then(() => {
+    if (SIGNED_IN && !gridKey()) { loadOverview(); startPolling(); }
+    if (!apiKey() && !SIGNED_IN && get("aipg_onboarded") !== "1") openKeyGuide();
+  });
   checkNewModels();
   bootAutostart();
   wireQuick();
@@ -1928,6 +1965,49 @@ function wireQuick() {
   // files dropped outside the chat must not replace the app with the file
   window.addEventListener("dragover", (e) => e.preventDefault());
   window.addEventListener("drop", (e) => e.preventDefault());
+}
+
+/* ---------- signing in through the browser (no API key) ---------- */
+async function signIn() {
+  if (!TAURI.core || SIGNING) return;
+  SIGNING = true; renderAccount();
+  keyGuideMsg("Your browser opens the AIPG Console. Approve the request there, then come back.");
+  try {
+    await invoke("auth_signin");
+    await refreshAuth();
+    SIGNING = false;
+    closeKeyGuide(); syncConnectorKey(); startPolling(); show("overview"); toast("Signed in");
+  } catch (e) {
+    SIGNING = false;
+    const m = emsg(e);
+    keyGuideMsg(m, "bad"); toast(m);
+  }
+  renderAccount();
+}
+async function signOut() {
+  if (!(await askConfirm("Sign out? The app forgets the sign-in and ends it at the grid. A saved API key is kept.", "Sign out"))) return;
+  try { await invoke("auth_signout"); } catch (e) {}
+  OAUTH_TOKEN = ""; SIGNED_IN = false;
+  renderAccount(); syncConnectorKey(); startPolling(); loadOverview(); toast("Signed out");
+}
+function renderAccount() {
+  if (!$("#field-account")) return;
+  $("#field-account").style.display = TAURI.core ? "" : "none";
+  $("#wc-signin-box").style.display = TAURI.core ? "" : "none";
+  $("#acct-state").textContent = SIGNING ? "Waiting for the browser…"
+    : SIGNED_IN ? "Signed in" + (gridKey() ? " · the API key below is used first" : "") : "Not signed in";
+  $("#acct-signin").style.display = SIGNING || SIGNED_IN ? "none" : "";
+  $("#acct-cancel").style.display = SIGNING ? "" : "none";
+  $("#acct-signout").style.display = SIGNED_IN && !SIGNING ? "" : "none";
+  $("#wc-signin").disabled = SIGNING;
+  $("#wc-signin").textContent = SIGNING ? "Waiting for the browser…" : "Sign in with your browser";
+}
+function wireAccount() {
+  $("#acct-signin").onclick = signIn;
+  $("#wc-signin").onclick = signIn;
+  $("#acct-signout").onclick = signOut;
+  $("#acct-cancel").onclick = () => { if (TAURI.core) invoke("auth_cancel").catch(() => {}); };
+  renderAccount();
 }
 
 /* ---------- getting an API key: guided, with a live check ---------- */
@@ -2037,7 +2117,7 @@ async function bootAutostart() {
   // the worker was running when an update was installed: bring it back once
   const resume = get("aipg_resume_worker") === "1";
   if (resume) set("aipg_resume_worker", "0");
-  if (!TAURI.core || !(resume || get("aipg_autostart") === "1") || !apiKey()) return;
+  if (!TAURI.core || !(resume || get("aipg_autostart") === "1") || !gridKey()) return;
   try { if (await invoke("worker_running")) return; } catch (e) { return; }
   show("worker"); // populates fields + lets the user watch progress
   $("#wname2").value = get("aipg_wname") || "";

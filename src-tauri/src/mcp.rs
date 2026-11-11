@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::auth;
 use crate::privacy;
 
 const API: &str = "https://api.aipowergrid.io/v1";
@@ -27,18 +28,26 @@ struct Ctx {
 }
 
 impl Ctx {
-    fn api_key(&self) -> Result<String, String> {
-        let from_file = std::fs::read_to_string(&self.key_file)
+    /// What the connector presents to the grid: the stored API key, or the
+    /// token of the browser sign-in when the connector was enabled that way.
+    async fn bearer(&self) -> Result<String, String> {
+        let cfg = std::fs::read_to_string(&self.key_file)
             .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .and_then(|v| v["api_key"].as_str().map(|s| s.trim().to_string()))
-            .filter(|s| !s.is_empty());
-        from_file
-            .or_else(|| std::env::var("AIPG_API_KEY").ok().filter(|s| !s.trim().is_empty()))
-            .ok_or_else(|| {
-                "No grid API key available. Open AIPG Desktop → Connect and enable the connector."
-                    .to_string()
-            })
+            .unwrap_or(Value::Null);
+        if let Some(k) = cfg["api_key"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            return Ok(k.to_string());
+        }
+        if let Some(k) = std::env::var("AIPG_API_KEY").ok().filter(|s| !s.trim().is_empty()) {
+            return Ok(k);
+        }
+        if cfg["use_signin"].as_bool() == Some(true) {
+            return match auth::bearer(&self.data_dir(), &self.http, auth::BASE).await? {
+                Some(t) => Ok(t),
+                None => Err(auth::ENDED.to_string()),
+            };
+        }
+        Err("The connector is not enabled. Open AIPG Desktop → Connect and enable it.".to_string())
     }
     /// What happens to private values (keys, e-mail addresses, IBANs, …) in a
     /// request an assistant sends: "mask" (default), "block" or "off".
@@ -551,7 +560,7 @@ async fn get_json(ctx: &Ctx, path: &str, auth: bool) -> Result<Value, String> {
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(30));
     if auth {
-        req = req.bearer_auth(ctx.api_key()?);
+        req = req.bearer_auth(ctx.bearer().await?);
     }
     let r = req.send().await.map_err(|e| format!("Could not reach the grid: {e}"))?;
     let status = r.status();
@@ -566,7 +575,7 @@ async fn post_json(ctx: &Ctx, path: &str, body: &Value, secs: u64) -> Result<Val
     let r = ctx
         .http
         .post(format!("{API}{path}"))
-        .bearer_auth(ctx.api_key()?)
+        .bearer_auth(ctx.bearer().await?)
         .timeout(Duration::from_secs(secs))
         .json(body)
         .send()
@@ -585,7 +594,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     if prompt.is_empty() {
         return Err("`prompt` is required.".into());
     }
-    ctx.api_key()?; // fail before any lookup
+    ctx.bearer().await?; // fail before any lookup
     let wanted = args["model"].as_str().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("auto");
     let max_tokens = args["max_tokens"].as_u64().unwrap_or(2048).clamp(1, 32000);
     let system = args["system"].as_str().map(str::trim).filter(|s| !s.is_empty());
@@ -924,7 +933,7 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
     }
     let size = args["size"].as_str().filter(|s| SIZES.contains(s)).unwrap_or(SIZES[0]);
     let n = args["n"].as_u64().unwrap_or(1).clamp(1, 4);
-    ctx.api_key()?; // fail before looking up models
+    ctx.bearer().await?; // fail before looking up models
     let model = match args["model"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
         Some(m) => resolve_model(&status_models(ctx).await, m, "image")?,
         None => {

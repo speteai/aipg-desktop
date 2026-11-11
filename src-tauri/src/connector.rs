@@ -84,6 +84,8 @@ pub struct ConnectorStatus {
     /// Estimated spend and number of paid requests through the connector today (UTC).
     spent_today_usd: f64,
     requests_today: u64,
+    /// "key", "signin" or "" when off.
+    via: String,
     /// One-line command for Claude Code.
     command: String,
     /// Generic `mcpServers` snippet for other MCP clients.
@@ -109,7 +111,8 @@ pub fn connector_status(app: AppHandle) -> Result<ConnectorStatus, String> {
         daily_limit_usd: read_key_file(&app)["daily_limit_usd"].as_f64().unwrap_or(0.0),
         spent_today_usd: spent,
         requests_today: requests,
-        enabled: read_key_file(&app)["api_key"].as_str().map(|k| !k.trim().is_empty()).unwrap_or(false),
+        enabled: via(&read_key_file(&app)) != "",
+        via: via(&read_key_file(&app)).into(),
         claude_found: cfg_path.parent().map(|d| d.exists()).unwrap_or(false),
         claude_registered: registered,
         claude_config: cfg_path.to_string_lossy().into_owned(),
@@ -119,6 +122,17 @@ pub fn connector_status(app: AppHandle) -> Result<ConnectorStatus, String> {
         launcher,
         key_file: key,
     })
+}
+
+/// How the connector reaches the grid: "key", "signin" or "" (off).
+fn via(cfg: &Value) -> &'static str {
+    if cfg["api_key"].as_str().map(|k| !k.trim().is_empty()).unwrap_or(false) {
+        "key"
+    } else if cfg["use_signin"].as_bool() == Some(true) {
+        "signin"
+    } else {
+        ""
+    }
 }
 
 fn read_key_file(app: &AppHandle) -> Value {
@@ -152,16 +166,28 @@ pub fn connector_protect_set(app: AppHandle, mode: String) -> Result<(), String>
     write_key_file(&app, &cfg)
 }
 
-/// Store the API key for the connector process (owner-readable only on Unix).
+/// Turn the connector on. With an API key, the key is stored for the connector
+/// process (owner-readable only on Unix); without one, the connector uses the
+/// browser sign-in.
 #[tauri::command]
 pub fn connector_enable(app: AppHandle, api_key: String) -> Result<(), String> {
     let api_key = api_key.trim();
-    if api_key.is_empty() {
-        return Err("Save your API key in Settings first.".into());
-    }
     // keep other settings (the daily limit) when the key is refreshed
     let mut cfg = read_key_file(&app);
-    cfg["api_key"] = json!(api_key);
+    if api_key.is_empty() {
+        if !crate::auth::signed_in(&crate::worker::data_dir(&app)) {
+            return Err("Sign in or save an API key in Settings first.".into());
+        }
+        if let Some(o) = cfg.as_object_mut() {
+            o.remove("api_key");
+        }
+        cfg["use_signin"] = json!(true);
+    } else {
+        if let Some(o) = cfg.as_object_mut() {
+            o.remove("use_signin");
+        }
+        cfg["api_key"] = json!(api_key);
+    }
     write_key_file(&app, &cfg)
 }
 
@@ -195,6 +221,7 @@ pub fn connector_disable(app: AppHandle) -> Result<(), String> {
         let mut cfg = read_key_file(&app);
         if let Some(o) = cfg.as_object_mut() {
             o.remove("api_key");
+            o.remove("use_signin");
         }
         if cfg.as_object().map(|o| o.is_empty()).unwrap_or(true) {
             std::fs::remove_file(&path).map_err(e)?;
