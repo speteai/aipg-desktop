@@ -2111,6 +2111,88 @@ async function loadNetwork() {
 
 /* ---------- connect: local MCP connector for Claude & co. ---------- */
 let CONNECT_WIRED = false;
+/* ---------- Coding tools: grid models as the model of a coding tool ---------- */
+const CT_BASE = "https://api.aipowergrid.io";
+let CT_TEXT = [], CT_ANTHROPIC = null; // null = not known
+function ctModel() { return $("#ct-model").value || ""; }
+// Which models the grid serves in Anthropic format is not published. Asking
+// for a model that does not exist makes the grid list them; nothing is billed.
+async function ctProbeAnthropic(key) {
+  try {
+    const r = await fetch(CT_BASE + "/v1/messages", {
+      method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+      body: JSON.stringify({ model: "aipg-desktop-model-check", max_tokens: 1, messages: [{ role: "user", content: "." }] }),
+    });
+    if (r.status === 503) return [];
+    if (r.status !== 404) return null;
+    const d = await r.json();
+    const msg = String((d && d.detail && (d.detail.message || d.detail)) || "");
+    const m = /Online:\s*\[(.*)\]/.exec(msg); if (!m) return null;
+    return [...m[1].matchAll(/'([^']+)'|"([^"]+)"/g)].map((x) => x[1] || x[2]);
+  } catch (e) { return null; }
+}
+async function loadCodingTools(force) {
+  const key = gridKey();
+  $("#ct-nokey").style.display = key ? "none" : "";
+  if (force || !CT_TEXT.length) {
+    try {
+      const r = await fetch(API + "/status/models", { headers: { "Accept": "application/json" } });
+      const d = await r.json();
+      CT_TEXT = (Array.isArray(d) ? d : []).filter((m) => m.type === "text" && (m.count || 0) > 0);
+    } catch (e) { CT_TEXT = []; }
+    CT_ANTHROPIC = key ? await ctProbeAnthropic(key) : null;
+    const sel = $("#ct-model"), keep = sel.value || get("aipg_ct_model") || "";
+    sel.innerHTML = CT_TEXT.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("")
+      || '<option value="">no text model online</option>';
+    if (CT_TEXT.some((m) => m.name === keep)) sel.value = keep;
+    else if (CT_ANTHROPIC && CT_ANTHROPIC.length && CT_TEXT.some((m) => m.name === CT_ANTHROPIC[0])) sel.value = CT_ANTHROPIC[0];
+  }
+  renderCodingTools();
+}
+function ctClaudeCode(key, kind) {
+  const m = ctModel();
+  const env = { ANTHROPIC_BASE_URL: CT_BASE, ANTHROPIC_AUTH_TOKEN: key, ANTHROPIC_MODEL: m,
+    // background tasks and the model aliases would otherwise ask for Claude models the grid does not have
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: m, ANTHROPIC_DEFAULT_SONNET_MODEL: m, ANTHROPIC_DEFAULT_OPUS_MODEL: m };
+  if (kind === "json") return JSON.stringify({ env }, null, 2);
+  if (kind === "ps") return Object.entries(env).map(([k, v]) => `$env:${k}="${v}"`).join("\n") + "\nclaude";
+  return Object.entries(env).map(([k, v]) => `export ${k}="${v}"`).join("\n") + "\nclaude";
+}
+function renderCodingTools() {
+  const m = ctModel(), info = CT_TEXT.find((x) => x.name === m);
+  const p = info && info.pricing;
+  $("#ct-modelnote").textContent = !info ? "" : [
+    info.max_context_length ? `context ${Number(info.max_context_length).toLocaleString("en-US")} tokens` : "",
+    info.tokens_per_s ? `about ${Math.round(info.tokens_per_s)} tokens/s` : "",
+    p && p.input_per_mtok_usd != null ? `$${p.input_per_mtok_usd} in / $${p.output_per_mtok_usd} out per million tokens` : "",
+    `${info.count} worker${info.count === 1 ? "" : "s"} online`,
+  ].filter(Boolean).join(" · ");
+  $("#ct-openai").textContent = `Base URL:  ${API}\nModel:     ${m || "—"}\nAPI key:   your Grid API key (grid_…)`;
+  const st = $("#ct-cc-state");
+  if (CT_ANTHROPIC == null) st.textContent = gridKey()
+    ? "Could not check which models accept Claude Code right now."
+    : "Add an API key to see which models accept Claude Code.";
+  else if (!CT_ANTHROPIC.length) st.textContent = "No model on the grid accepts Claude Code at the moment (it needs a worker that speaks the Anthropic format). Try again later.";
+  else st.textContent = (CT_ANTHROPIC.includes(m) ? `${m} accepts Claude Code. ` : `${m || "This model"} does not accept Claude Code. `) +
+    `Models that do right now: ${CT_ANTHROPIC.join(", ")}.`;
+  $("#ct-cc").textContent = ctClaudeCode("grid_…", $("#ct-os").value);
+}
+function wireCodingTools() {
+  const needKey = () => { if (gridKey()) return true; toast("Add a Grid API key in Settings first"); return false; };
+  $("#ct-os").value = get("aipg_ct_os") || (/Win/i.test(navigator.platform || navigator.userAgent) ? "ps" : "sh");
+  $("#ct-os").onchange = () => { set("aipg_ct_os", $("#ct-os").value); renderCodingTools(); };
+  $("#ct-model").onchange = () => { set("aipg_ct_model", ctModel()); renderCodingTools(); };
+  $("#ct-refresh").onclick = () => loadCodingTools(true);
+  $("#ct-getkey").onclick = () => openKeyGuide();
+  $("#ct-copy-base").onclick = () => copyText(API, "Base URL copied");
+  $("#ct-copy-model").onclick = () => copyText(ctModel(), "Model copied");
+  $("#ct-copy-key").onclick = () => { if (needKey()) copyText(gridKey(), "API key copied"); };
+  $("#ct-copy-cc").onclick = () => {
+    if (!needKey()) return;
+    if (!ctModel()) return toast("No text model is online");
+    copyText(ctClaudeCode(gridKey(), $("#ct-os").value), "Copied with your API key");
+  };
+}
 async function copyText(txt, okMsg) {
   try { await navigator.clipboard.writeText(txt); toast(okMsg || "Copied"); }
   catch (e) { toast("Could not copy; select the text manually"); }
@@ -2169,7 +2251,9 @@ async function loadConnect() {
     $("#cn-claude-remove").onclick = () => run("connector_claude_remove", {}, "Removed from Claude Desktop");
     $("#cn-copy-command").onclick = () => copyText($("#cn-command").textContent, "Command copied");
     $("#cn-copy-snippet").onclick = () => copyText($("#cn-snippet").textContent, "Config copied");
+    wireCodingTools();
   }
+  loadCodingTools(false);
   try { renderConnect(await invoke("connector_status")); } catch (e) { toast(emsg(e)); }
 }
 /* keep the connector's stored key in step with the key in Settings */

@@ -391,6 +391,50 @@
               “Summarise this text using the grid”, or “What is my grid balance?”.</p>
           </div>
         </div>
+
+        <div class="vh" style="margin-top:28px"><h2 class="sec" style="margin:0">Coding tools</h2></div>
+        <p class="muted">Use a grid model as the model of a coding tool. This is separate from the connector above: the tool
+          talks to the grid directly with your API key, and everything it sends is billed to your account.</p>
+        <div class="banner" id="ct-nokey" style="display:none">These tools need a Grid API key; the browser sign-in is not enough.
+          <button class="btn" id="ct-getkey" style="margin-left:8px">Add an API key</button></div>
+        <div class="field" style="max-width:none">
+          <label>Model</label>
+          <div class="row">
+            <select id="ct-model" class="sel"></select>
+            <button class="btn ghost" id="ct-refresh">Refresh</button>
+          </div>
+          <p class="hint" id="ct-modelnote"></p>
+        </div>
+        <div class="field" style="max-width:none">
+          <label>Cline, Roo Code, Kilo, Continue, Cursor, aider and other OpenAI-compatible tools</label>
+          <pre id="ct-openai" class="log cnpre"></pre>
+          <div class="row">
+            <button class="btn" id="ct-copy-base">Copy base URL</button>
+            <button class="btn" id="ct-copy-model">Copy model</button>
+            <button class="btn" id="ct-copy-key">Copy API key</button>
+          </div>
+          <p class="hint">In the tool, choose the provider type “OpenAI compatible” and enter these three values.</p>
+        </div>
+        <div class="field" style="max-width:none">
+          <label>Claude Code <span class="muted" style="font-weight:400">· experimental</span></label>
+          <p class="hint" id="ct-cc-state" style="margin:0 0 var(--s2)"></p>
+          <div class="row" style="margin-bottom:var(--s2)">
+            <select id="ct-os" class="sel">
+              <option value="ps">Windows (PowerShell)</option>
+              <option value="sh">macOS / Linux</option>
+              <option value="json">settings.json</option>
+            </select>
+          </div>
+          <pre id="ct-cc" class="log cnpre"></pre>
+          <div class="row"><button class="btn" id="ct-copy-cc">Copy with my API key</button></div>
+          <p class="hint">The text above shows a placeholder; the button copies it with your real key. Claude Code then
+            runs on the grid model instead of Claude: expect weaker results on large tasks. If Claude Code reports a conflict with an existing
+            login, run <code>/logout</code> in it. Known limits: token counts are estimates, a request may hold at most
+            200,000 characters, and the grid allows 30 requests a minute.</p>
+        </div>
+        <p class="hint" style="max-width:none"><b>Privacy:</b> a coding tool sends your source code and file contents to the grid, where they are
+          processed in plain text on computers run by independent operators. The masking of private data that the chat and
+          the connector apply does not apply here. Do not use this for code or files that must stay confidential.</p>
       </div>
     </section>
 
