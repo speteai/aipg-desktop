@@ -1348,6 +1348,7 @@ async function askOnce(src, model, messages, maxTokens) {
   if (!r.ok) throw new Error("HTTP " + r.status + (d && d.detail ? ": " + (typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail)) : ""));
   const msg = (d.choices && d.choices[0] && d.choices[0].message) || {};
   return { text: String(msg.content || "").trim(), id: d.id || "", model: d.model || model,
+    worker: (d.grid && d.grid.worker) ? String(d.grid.worker) : "",
     t0, t1: Date.now(), tokens: (d.usage && d.usage.completion_tokens) || 0 };
 }
 // Who gives the second opinion: another grid model that is online (fastest
@@ -1428,7 +1429,12 @@ async function crossCheck(c, m) {
     const judged = await askOnce(pick.src, pick.model, [...note(), { role: "user", content: prompt }], 1024);
     const v = parseVerdict(judged.text);
     const first = { model: m.used, t0: m.t0, t1: m.t1 };
-    const [w1, w2] = pick.src === "grid" ? await workersFor([first, second]) : [(await workersFor([first]))[0], ""];
+    // the grid names the worker with the answer; the job feed is only a fallback
+    let [w1, w2] = [m.worker || "", pick.src === "grid" ? (second.worker || "") : ""];
+    if (!w1 || (pick.src === "grid" && !w2)) {
+      const g = pick.src === "grid" ? await workersFor([first, second]) : [(await workersFor([first]))[0], ""];
+      w1 = w1 || g[0]; w2 = w2 || g[1];
+    }
     m.check = { verdict: v.verdict, note: show(v.note), answer: show(second.text), model: second.model || pick.model, src: pick.src, kind: pick.kind, w1, w2, at: Date.now() };
   } catch (e) {
     m.check = { verdict: "failed", note: emsg(e), at: Date.now() };
@@ -1649,7 +1655,7 @@ async function chatSend() {
   const payload = { model, messages: sendMsgs, stream: true };
   if (/qwen3|gpt-oss|auto|deepseek|qwen38/i.test(model)) payload.max_tokens = 2048;
 
-  let acc = "", think = "", rid = "", used = "", reply = null;
+  let acc = "", think = "", rid = "", used = "", gridWorker = "", reply = null;
   const sentAt = Date.now();
   try {
     const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload), signal: CHAT_ABORT.signal });
@@ -1668,6 +1674,7 @@ async function chatSend() {
           const j = JSON.parse(line);
           const delta = (j.choices && j.choices[0] && j.choices[0].delta) || {};
           if (j.id) rid = j.id;
+          if (j.grid && j.grid.worker) gridWorker = String(j.grid.worker);
           if (j.model) used = j.model;
           if (delta.content) { acc += delta.content; body.textContent = shown(acc); }
           if (delta.reasoning_content) think += delta.reasoning_content;
@@ -1680,7 +1687,7 @@ async function chatSend() {
     acc = shown(acc);
     body.textContent = acc;
     reply = { role: "assistant", content: acc, model: label };
-    if (src === "grid") { reply.rid = rid; reply.used = used || model; reply.t0 = sentAt; reply.t1 = Date.now(); }
+    if (src === "grid") { reply.rid = rid; reply.used = used || model; reply.t0 = sentAt; reply.t1 = Date.now(); if (gridWorker) reply.worker = gridWorker; }
     c.msgs.push(reply);
     c.updated = Date.now();
   } catch (e) {
