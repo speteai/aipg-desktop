@@ -155,6 +155,7 @@ pub fn run() {
             account::auth_signout,
             connector::connector_limit_set,
             connector::connector_protect_set,
+            connector::connector_inline_images_set,
             connector::connector_claude_add,
             connector::connector_claude_remove,
         ])

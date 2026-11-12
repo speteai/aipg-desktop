@@ -942,6 +942,7 @@ pub async fn worker_start(
         let app2 = app.clone();
         let piped = piped.clone();
         tokio::spawn(async move {
+            let started = std::time::Instant::now();
             let mut lines = BufReader::new(out).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 piped.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -953,10 +954,23 @@ pub async fn worker_start(
                 // still the stored child: it ended on its own, so say how
                 let child = procs.worker.lock().await.take();
                 let how = match child {
-                    Some(mut c) => match tokio::time::timeout(std::time::Duration::from_secs(3), c.wait()).await {
-                        Ok(Ok(st)) => format!("worker process ended on its own ({st})."),
-                        _ => "worker process ended on its own.".to_string(),
-                    },
+                    Some(mut c) => {
+                        let status = match tokio::time::timeout(std::time::Duration::from_secs(3), c.wait()).await {
+                            Ok(Ok(st)) => format!(" ({st})"),
+                            _ => String::new(),
+                        };
+                        // The worker does not say why it stops (on Windows it has
+                        // no error output at all), so record what can be seen here.
+                        let ollama = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(2)).build() {
+                            Ok(h) => h.get(format!("{}/api/version", ollama_url())).send().await.map(|r| r.status().is_success()).unwrap_or(false),
+                            Err(_) => false,
+                        };
+                        format!(
+                            "worker process ended on its own{status} after {} min. The model server (Ollama) {}. The worker gives no reason; its last lines are above.",
+                            started.elapsed().as_secs() / 60,
+                            if ollama { "still answers, so it was not the cause" } else { "does not answer: that is the likely cause" }
+                        )
+                    }
                     None => "worker process stopped by the app.".to_string(),
                 };
                 log_append(&app2, &desk_line(&how));

@@ -2122,6 +2122,7 @@ function renderConnect(st) {
     : "Claude Desktop was not found here; the entry is written anyway and used once it is installed.";
   $("#cn-claude-path").textContent = st.claude_config;
   $("#cn-protect").value = st.protect || "mask";
+  $("#cn-inline").checked = st.inline_images !== false;
   if (document.activeElement !== $("#cn-limit")) $("#cn-limit").value = st.daily_limit_usd ? String(st.daily_limit_usd) : "";
   const fm = (x) => "$" + (x && x < 0.01 ? x.toFixed(6) : (x || 0).toFixed(4));
   $("#cn-spent").textContent =
@@ -2155,6 +2156,7 @@ async function loadConnect() {
     };
     $("#cn-limit-save").onclick = saveLimit;
     $("#cn-protect").onchange = () => run("connector_protect_set", { mode: $("#cn-protect").value }, "Saved");
+    $("#cn-inline").onchange = () => run("connector_inline_images_set", { on: $("#cn-inline").checked }, "Saved");
     $("#cn-limit").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("#cn-limit").blur(); saveLimit(); } });
     $("#cn-claude-add").onclick = () => run("connector_claude_add", {}, "Added. Restart Claude Desktop.");
     $("#cn-claude-remove").onclick = () => run("connector_claude_remove", {}, "Removed from Claude Desktop");
