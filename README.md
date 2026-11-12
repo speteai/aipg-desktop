@@ -62,6 +62,9 @@ Chat works right away — running a worker is optional and needs an API key.
   - shows live download progress (GB and %), lets you pick **where models are stored**,
     and lists installed models with their size so you can delete what you no longer need,
   - restarts the worker automatically if it crashes.
+- **Coding tools** — Connect shows ready-to-copy settings for using a grid model in OpenAI-compatible coding tools
+  (Cline, Roo Code, Kilo, Continue, Cursor, aider) and, experimentally, in Claude Code. The app checks live which
+  models accept Claude Code. Source code sent this way is processed in plain text by independent operators.
 - **Worker log and warm start** — the worker's output is kept in a log file, also on Windows where the worker has no
   console (the app then reads it from the worker's local dashboard). Every start and stop is logged with time and
   reason. Right after a start the model is loaded into memory, so the first grid job does not run into a timeout.
