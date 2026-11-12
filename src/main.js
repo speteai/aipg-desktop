@@ -2114,6 +2114,12 @@ let CONNECT_WIRED = false;
 /* ---------- Coding tools: grid models as the model of a coding tool ---------- */
 const CT_BASE = "https://api.aipowergrid.io";
 let CT_TEXT = [], CT_ANTHROPIC = null; // null = not known
+// Claude Code sends about 23,000 tokens of instructions and tool descriptions
+// before the first word of the user (measured with 2.1.322). A model with a
+// smaller context gets a cut-off prompt and answers nonsense.
+const CT_MIN_CTX = 32000;
+function ctCtx(name) { const m = CT_TEXT.find((x) => x.name === name); return m ? Number(m.max_context_length) || 0 : 0; }
+function ctFits(name) { const c = ctCtx(name); return !c || c >= CT_MIN_CTX; }
 function ctModel() { return $("#ct-model").value || ""; }
 // Which models the grid serves in Anthropic format is not published. Asking
 // for a model that does not exist makes the grid list them; nothing is billed.
@@ -2145,7 +2151,12 @@ async function loadCodingTools(force) {
     sel.innerHTML = CT_TEXT.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("")
       || '<option value="">no text model online</option>';
     if (CT_TEXT.some((m) => m.name === keep)) sel.value = keep;
-    else if (CT_ANTHROPIC && CT_ANTHROPIC.length && CT_TEXT.some((m) => m.name === CT_ANTHROPIC[0])) sel.value = CT_ANTHROPIC[0];
+    else {
+      // a model that accepts Claude Code and has room for it, the largest context first
+      const good = (CT_ANTHROPIC || []).filter((n) => CT_TEXT.some((m) => m.name === n) && ctFits(n)).sort((a, b) => ctCtx(b) - ctCtx(a));
+      const big = [...CT_TEXT].sort((a, b) => (b.max_context_length || 0) - (a.max_context_length || 0));
+      if (good.length) sel.value = good[0]; else if (big.length) sel.value = big[0].name;
+    }
   }
   renderCodingTools();
 }
@@ -2173,8 +2184,14 @@ function renderCodingTools() {
     ? "Could not check which models accept Claude Code right now."
     : "Add an API key to see which models accept Claude Code.";
   else if (!CT_ANTHROPIC.length) st.textContent = "No model on the grid accepts Claude Code at the moment (it needs a worker that speaks the Anthropic format). Try again later.";
-  else st.textContent = (CT_ANTHROPIC.includes(m) ? `${m} accepts Claude Code. ` : `${m || "This model"} does not accept Claude Code. `) +
-    `Models that do right now: ${CT_ANTHROPIC.join(", ")}.`;
+  else {
+    const usable = CT_ANTHROPIC.filter(ctFits);
+    const list = usable.length ? `Models that work with Claude Code right now: ${usable.join(", ")}.` : "No model online is suitable for Claude Code at the moment.";
+    st.textContent = !CT_ANTHROPIC.includes(m) ? `${m || "This model"} does not accept Claude Code. ${list}`
+      : !ctFits(m) ? `${m} is too small for Claude Code: its context is ${ctCtx(m).toLocaleString("en-US")} tokens, and Claude Code sends about 23,000 tokens before your first word. ${list}`
+      : `${m} works with Claude Code. ${list}`;
+  }
+  $("#ct-small").style.display = m && !ctFits(m) ? "" : "none";
   $("#ct-cc").textContent = ctClaudeCode("grid_…", $("#ct-os").value);
 }
 function wireCodingTools() {
