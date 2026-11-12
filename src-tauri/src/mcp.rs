@@ -826,6 +826,35 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     };
     // worst case for the spending limit: full answer length at this model's price
     let input_est = approx_tokens(prompt) + system.map(approx_tokens).unwrap_or(0);
+    // A prompt that does not fit the model is cut off by the worker without a
+    // word, answered from the remaining part and billed all the same. Refuse
+    // that here. (Four characters per token: a cautious count, so that a
+    // prompt that might still fit is not turned away.)
+    let chars = prompt.chars().count() + system.map(|s| s.chars().count()).unwrap_or(0);
+    let likely_tokens = (chars as u64).div_ceil(4);
+    let context = models
+        .iter()
+        .find(|m| m["name"].as_str() == Some(model.as_str()))
+        .and_then(|m| m["max_context_length"].as_u64());
+    if let Some(ctx_len) = context {
+        if likely_tokens > ctx_len.saturating_sub(256) {
+            let mut larger: Vec<(u64, &str)> = models
+                .iter()
+                .filter(|m| m["type"] == "text" && m["count"].as_u64().unwrap_or(0) > 0)
+                .filter_map(|m| Some((m["max_context_length"].as_u64()?, m["name"].as_str()?)))
+                .filter(|(c, _)| likely_tokens + 1024 < *c)
+                .collect();
+            larger.sort_by(|a, b| b.0.cmp(&a.0));
+            let hint = if larger.is_empty() {
+                "No model online has room for it: shorten the text or split it into parts.".to_string()
+            } else {
+                format!("Models with room for it: {}.", larger.iter().map(|(c, n)| format!("{n} ({c} tokens)")).collect::<Vec<_>>().join(", "))
+            };
+            return Err(format!(
+                "Not sent: the prompt is about {likely_tokens} tokens long, but {model} only takes {ctx_len} tokens including its answer. The worker would cut the text off without saying so and answer from the rest, and the request would still be billed. {hint} Nothing was sent or billed."
+            ));
+        }
+    }
     let before = if model == "auto" { worst_text_rates(&models) } else { text_rates(&models, &model) };
     let reserved = ctx.reserve(before.map(|r| text_cost(r, input_est, max_tokens)))?;
     let flight = Flight::begin();
@@ -902,7 +931,9 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         (Some(b), Some(a)) if b - a > 0.000_000_5 && alone => Some(b - a),
         _ => None,
     }
-    .filter(|c| cost.map(|list| *c <= list * 1.5 + 0.000_001).unwrap_or(reserved <= 0.0 || *c <= reserved));
+    // plausible for this one request: not above what was reserved as its worst
+    // case (the grid counts the whole prompt, even when a worker reads less)
+    .filter(|c| *c <= reserved.max(cost.unwrap_or(0.0) * 1.5) + 0.000_001 || (reserved <= 0.0 && cost.is_none()));
     match (charged, cost) {
         (Some(c), Some(list)) => note.push_str(&format!(" · charged {} (balance before and after; list price for the reported tokens would be {})", money(c), money(list))),
         (Some(c), None) => note.push_str(&format!(" · charged {} (balance before and after)", money(c))),
@@ -918,6 +949,14 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         note.push_str(&format!(" · max_tokens raised from {a} to {MIN_ANSWER_TOKENS} so that a model that thinks first still has room to answer"));
     }
     note.push_str(&privacy_note);
+    // the worker read far less than was sent: it cut the prompt
+    if let Some(read) = tokens.0 {
+        if likely_tokens >= 2000 && read * 2 < likely_tokens {
+            note.push_str(&format!(
+                " · WARNING: the model read only {read} of about {likely_tokens} prompt tokens, so the text was cut off and the answer rests on part of it; use a model with a larger context"
+            ));
+        }
+    }
     note.push_str(&format!(" · answered in {took:.1} s"));
     // The grid names the worker and its timing next to the answer (`grid`).
     // Only when that is missing is the public job feed searched instead.
