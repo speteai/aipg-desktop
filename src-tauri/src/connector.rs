@@ -79,6 +79,8 @@ pub struct ConnectorStatus {
     claude_config: String,
     /// Private values in assistant requests: "mask", "block" or "off".
     protect: String,
+    /// Generated images are handed back to the assistant (not only their paths).
+    inline_images: bool,
     /// Daily spending limit for assistants in USD; 0 = none.
     daily_limit_usd: f64,
     /// Estimated spend and number of paid requests through the connector today (UTC).
@@ -108,6 +110,7 @@ pub fn connector_status(app: AppHandle) -> Result<ConnectorStatus, String> {
             Some("off") => "off".into(),
             _ => "mask".into(),
         },
+        inline_images: read_key_file(&app)["inline_images"] != false,
         daily_limit_usd: read_key_file(&app)["daily_limit_usd"].as_f64().unwrap_or(0.0),
         spent_today_usd: spent,
         requests_today: requests,
@@ -152,6 +155,14 @@ pub fn connector_limit_set(app: AppHandle, usd: f64) -> Result<(), String> {
     }
     let mut cfg = read_key_file(&app);
     cfg["daily_limit_usd"] = json!(usd);
+    write_key_file(&app, &cfg)
+}
+
+/// Whether generated images go back to the assistant or only their paths.
+#[tauri::command]
+pub fn connector_inline_images_set(app: AppHandle, on: bool) -> Result<(), String> {
+    let mut cfg = read_key_file(&app);
+    cfg["inline_images"] = json!(on);
     write_key_file(&app, &cfg)
 }
 

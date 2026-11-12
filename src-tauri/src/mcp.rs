@@ -59,6 +59,15 @@ impl Ctx {
             .filter(|s| s == "block" || s == "off")
             .unwrap_or_else(|| "mask".into())
     }
+    /// Whether generated images are handed back to the assistant itself.
+    /// Off: only the file paths are returned (set in AIPG Desktop → Connect).
+    fn inline_images(&self) -> bool {
+        std::fs::read_to_string(&self.key_file)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .map(|v| v["inline_images"] != false)
+            .unwrap_or(true)
+    }
     /// Daily spending limit for requests made through the connector (USD).
     fn daily_limit(&self) -> Option<f64> {
         std::fs::read_to_string(&self.key_file)
@@ -356,8 +365,16 @@ fn epoch_now() -> f64 {
 /// does not return a job id, so it is found by model, time and size; only an
 /// unambiguous match counts. A worker reports slightly fewer units than the
 /// grid bills as output tokens.
-fn match_job<'a>(jobs: &'a [Value], model: &str, out_tokens: Option<u64>, t0: f64, t1: f64) -> Option<&'a Value> {
+fn match_job<'a>(jobs: &'a [Value], model: &str, out_tokens: Option<u64>, t0: f64, t1: f64, taken: &[String]) -> Option<&'a Value> {
     let mut hits = jobs.iter().filter(|j| {
+        // a job already named for another answer, or one that ran longer than
+        // this request took, cannot be the one
+        if j["job_id"].as_str().map(|id| taken.iter().any(|t| t == id)).unwrap_or(false) {
+            return false;
+        }
+        if j["duration_s"].as_f64().map(|d| d > (t1 - t0) + 1.0).unwrap_or(false) {
+            return false;
+        }
         let when = j["created"].as_str().and_then(iso_epoch);
         let size = match (out_tokens, j["output_units"].as_f64()) {
             (Some(t), Some(u)) => u <= t as f64 && u >= t as f64 * 0.75,
@@ -372,6 +389,9 @@ fn match_job<'a>(jobs: &'a [Value], model: &str, out_tokens: Option<u64>, t0: f6
     if hits.next().is_some() { None } else { Some(first) }
 }
 
+/// Jobs this connector process has already named for an answer.
+static NAMED_JOBS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 async fn served_by(ctx: &Ctx, model: &str, out_tokens: Option<u64>, t0: f64, t1: f64) -> String {
     for attempt in 0..2 {
         if attempt > 0 {
@@ -379,15 +399,26 @@ async fn served_by(ctx: &Ctx, model: &str, out_tokens: Option<u64>, t0: f64, t1:
         }
         let Ok(feed) = get_json(ctx, "/jobs/recent?limit=50", false).await else { return String::new() };
         let jobs = feed["jobs"].as_array().cloned().unwrap_or_default();
-        let Some(job) = match_job(&jobs, model, out_tokens, t0, t1) else { continue };
+        let taken = NAMED_JOBS.lock().map(|g| g.clone()).unwrap_or_default();
+        let Some(job) = match_job(&jobs, model, out_tokens, t0, t1, &taken) else { continue };
         let Some(worker) = job["worker"].as_str() else { return String::new() };
+        if let Some(id) = job["job_id"].as_str() {
+            let Ok(mut named) = NAMED_JOBS.lock() else { return String::new() };
+            if named.iter().any(|t| t == id) {
+                continue; // a parallel request was quicker: look again
+            }
+            if named.len() >= 500 {
+                named.drain(..250);
+            }
+            named.push(id.to_string());
+        }
         let own = get_json(ctx, "/account/workers", true)
             .await
             .ok()
             .and_then(|w| w["workers"].as_array().cloned())
             .map(|a| a.iter().any(|x| x["name"].as_str() == Some(worker)))
             .unwrap_or(false);
-        let mut s = format!(" · served by worker {worker}{}", if own { " (the user's own worker)" } else { "" });
+        let mut s = format!(" · probably served by worker {worker}{}", if own { " (the user's own worker)" } else { "" });
         let id: String = job["job_id"].as_str().unwrap_or("").chars().take(8).collect();
         if !id.is_empty() {
             s.push_str(&format!(", job {id}"));
@@ -395,7 +426,7 @@ async fn served_by(ctx: &Ctx, model: &str, out_tokens: Option<u64>, t0: f64, t1:
         if let Some(d) = job["duration_s"].as_f64() {
             s.push_str(&format!(", {d:.1} s on the worker"));
         }
-        s.push_str(" (found in the public job feed by model, time and size)");
+        s.push_str(" (a guess, not a fact: the grid returns no job id, so the public job feed was searched by model, time and size; with several requests at once it can be the wrong job)");
         return s;
     }
     String::new()
@@ -524,7 +555,8 @@ fn tools() -> Value {
                     "prompt": { "type": "string", "description": "What the image should show." },
                     "model": { "type": "string", "description": "Grid image model from grid_models (matched leniently). Default: an online image model." },
                     "size": { "type": "string", "enum": SIZES, "description": "Width x height. Default 1024x1024." },
-                    "n": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Number of images. Default 1." }
+                    "n": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Number of images. Default 1." },
+                    "return_images": { "type": "boolean", "description": "Default true: small images are also returned to you so you can look at them. Set false to get only the file paths, which keeps third-party image content out of this conversation. The user can switch the return off for good in AIPG Desktop." }
                 },
                 "required": ["prompt"]
             }
@@ -947,6 +979,9 @@ async fn grid_quote(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         }
     }
     match post_json(ctx, "/account/credits/quote", &form, 30).await {
+        Ok(q) if model == "auto" && q["estimate"]["priced"] == false => {
+            lines.push("Grid quote: none for \"auto\". The grid prices the model it picks at dispatch; name a model to get its quote.".into())
+        }
         Ok(q) => lines.push(quote_line(&q)),
         Err(err) => lines.push(format!("The grid's quote endpoint did not answer: {err}")),
     }
@@ -955,7 +990,7 @@ async fn grid_quote(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         lines.push(format!("Daily limit for assistants: {} used of {}.", money(spent), money(limit)));
     }
     if modality == "text" {
-        lines.push("The input count is an estimate from the text length. The model's own chat template is billed on top (about 10 to 70 tokens, depending on the model).".into());
+        lines.push("These figures are upper bounds. The grid bills its own count of the prompt and of the answer; a model reports more tokens than that (its chat template and its own tokenizer), and in tests the amount charged was 50 to 90 % of the list price for the reported tokens.".into());
     }
     lines.push("Nothing was generated or billed.".into());
     Ok(vec![text(lines.join("\n"))])
@@ -1097,6 +1132,7 @@ fn store_image(dir: &Path, files: &Path, bytes: &[u8], mut entry: Value) -> Resu
 }
 
 async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
+    let inline = ctx.inline_images() && args["return_images"] != false;
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD;
     let prompt = args["prompt"].as_str().map(str::trim).unwrap_or("");
@@ -1175,7 +1211,7 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
         if let Some(url) = it["url"].as_str() {
             lines.push(format!("URL: {url}"));
         }
-        if inlined + bytes.len() <= INLINE_IMAGE_BYTES {
+        if inline && inlined + bytes.len() <= INLINE_IMAGE_BYTES {
             inlined += bytes.len();
             content.push(json!({ "type": "image", "data": b64.encode(&bytes), "mimeType": image_kind(&bytes).1 }));
         }
@@ -1192,6 +1228,13 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
         bill.push(' ');
         bill.push_str(&credit);
         bill.push('.');
+    }
+    if !inline {
+        lines.push(if ctx.inline_images() {
+            "The images themselves were not returned, as requested: only the paths above.".to_string()
+        } else {
+            "The images themselves are not returned to assistants (the user's setting in AIPG Desktop → Connect): only the paths above.".to_string()
+        });
     }
     let mut out = vec![text(format!(
         "Generated on AI Power Grid with {model} ({size}). The images are in the AIPG Desktop gallery.\n{}\n{bill}",

@@ -350,6 +350,12 @@
               handed to the assistant marked as untrusted third-party content.</p>
           </div>
           <div class="field" style="max-width:none">
+            <label>Generated images</label>
+            <div class="row"><label style="font-weight:400"><input type="checkbox" id="cn-inline"> Hand generated images back to the assistant</label></div>
+            <p class="hint">On: the assistant sees small images it generated. Off: it only gets the file paths; the images
+              stay in the gallery. Off keeps third-party image content out of the assistant's conversation and saves its memory.</p>
+          </div>
+          <div class="field" style="max-width:none">
             <label>Daily spending limit for assistants</label>
             <div class="row">
               <input id="cn-limit" type="text" inputmode="decimal" placeholder="e.g. 0.50 (USD per day, empty = no limit)" autocomplete="off" spellcheck="false">
