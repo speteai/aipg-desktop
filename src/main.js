@@ -284,6 +284,12 @@ function renderEarnHistory(h) {
     `<p class="hint">Total den: <b>${last}</b> · last change: <b>${delta >= 0 ? "+" : ""}${delta}</b> · ${n} data points (stored locally only)</p>`;
 }
 
+// The grid names the time of a job `created` (older builds: `ts`, `timestamp`).
+function jobWhen(j) {
+  const raw = j.created || j.ts || j.timestamp; if (!raw) return "—";
+  const d = new Date(typeof raw === "string" ? raw.replace(/(\.\d{3})\d+/, "$1") : raw);
+  return isNaN(d) ? String(raw) : d.toLocaleString();
+}
 async function loadEarnings() {
   try {
     // The totals are the workers' counters: `total_den` of /account/jobs
@@ -297,7 +303,7 @@ async function loadEarnings() {
     renderEarnHistory(den == null ? loadEarnHist() : recordEarn(den));
     const tb = $("#jobs tbody");
     tb.innerHTML = jobs.slice(0, 50).map((j) => `<tr>
-      <td>${esc(j.ts ? new Date(j.ts).toLocaleString() : (j.timestamp || "—"))}</td>
+      <td>${esc(jobWhen(j))}</td>
       <td>${esc(j.model || "")}</td><td>${esc(j.type || "")}</td>
       <td>${esc(j.den ?? "—")}</td><td>${esc(j.output_units ?? "—")}</td>
       <td>${esc(j.duration_s != null ? j.duration_s + "s" : "—")}</td></tr>`).join("")
