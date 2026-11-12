@@ -404,6 +404,8 @@
             <button class="btn ghost" id="ct-refresh">Refresh</button>
           </div>
           <p class="hint" id="ct-modelnote"></p>
+          <p class="hint" id="ct-small" style="display:none">This model has a small context. Coding tools send 10,000 to 25,000
+            tokens of instructions with every request, so it will lose part of them. Choose a model with a larger context.</p>
         </div>
         <div class="field" style="max-width:none">
           <label>Cline, Roo Code, Kilo, Continue, Cursor, aider and other OpenAI-compatible tools</label>
@@ -428,7 +430,8 @@
           <pre id="ct-cc" class="log cnpre"></pre>
           <div class="row"><button class="btn" id="ct-copy-cc">Copy with my API key</button></div>
           <p class="hint">The text above shows a placeholder; the button copies it with your real key. Claude Code then
-            runs on the grid model instead of Claude: expect weaker results on large tasks. If Claude Code reports a conflict with an existing
+            runs on the grid model instead of Claude: expect weaker results on large tasks. Every request carries about
+            23,000 tokens of instructions, so a short task costs roughly $0.002 to $0.004 at current prices. If Claude Code reports a conflict with an existing
             login, run <code>/logout</code> in it. Known limits: token counts are estimates, a request may hold at most
             200,000 characters, and the grid allows 30 requests a minute.</p>
         </div>
