@@ -854,7 +854,31 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     }
     note.push_str(&privacy_note);
     note.push_str(&format!(" · answered in {took:.1} s"));
-    note.push_str(&served_by(ctx, &used, tokens.1, sent_at, sent_at + took).await);
+    // The grid names the worker and its timing next to the answer (`grid`).
+    // Only when that is missing is the public job feed searched instead.
+    let meta = &d["grid"];
+    match meta["worker"].as_str().map(str::trim).filter(|w| !w.is_empty()) {
+        Some(worker) => {
+            let own = get_json(ctx, "/account/workers", true)
+                .await
+                .ok()
+                .and_then(|w| w["workers"].as_array().cloned())
+                .map(|a| a.iter().any(|x| x["name"].as_str() == Some(worker)))
+                .unwrap_or(false);
+            note.push_str(&format!(" · served by worker {worker}{}", if own { " (the user's own worker)" } else { "" }));
+            if let Some(t) = meta["gen_time"].as_f64() {
+                note.push_str(&format!(", {t:.1} s on the worker"));
+            }
+            if let Some(t) = meta["ttft"].as_f64() {
+                note.push_str(&format!(", first token after {t:.1} s"));
+            }
+            if let Some(t) = meta["tokens_per_s"].as_f64() {
+                note.push_str(&format!(", {t:.0} tokens/s while generating"));
+            }
+            note.push_str(" (as reported by the grid)");
+        }
+        None => note.push_str(&served_by(ctx, &used, tokens.1, sent_at, sent_at + took).await),
+    }
     let credit = credit_line(ctx).await;
     if !credit.is_empty() {
         note.push_str(" · ");
