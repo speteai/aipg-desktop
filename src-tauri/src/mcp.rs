@@ -446,24 +446,83 @@ pub fn run_stdio(key_file: PathBuf) {
         .connect_timeout(Duration::from_secs(20))
         .build()
         .unwrap_or_default();
-    let ctx = Ctx { key_file, http };
-    let stdin = std::io::stdin();
-    let mut out = std::io::stdout();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let reply = match serde_json::from_str::<Value>(line) {
-            Ok(msg) => rt.block_on(handle(&ctx, &msg)),
-            Err(_) => Some(rpc_error(Value::Null, -32700, "Parse error")),
-        };
-        if let Some(r) = reply {
-            if writeln!(out, "{r}").is_err() || out.flush().is_err() {
+    let ctx = std::sync::Arc::new(Ctx { key_file, http });
+    // Lines are read on their own thread, so a request that is waiting for the
+    // grid does not hold up the next one: an assistant that sends several tool
+    // calls at once gets them served at once.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
                 break;
             }
         }
+    });
+    rt.block_on(async move {
+        use futures_util::stream::{FuturesUnordered, StreamExt};
+        let mut out = std::io::stdout();
+        let mut running = FuturesUnordered::new();
+        let mut open = true;
+        loop {
+            tokio::select! {
+                line = rx.recv(), if open => match line {
+                    Some(line) => {
+                        let ctx = ctx.clone();
+                        running.push(async move {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                return None;
+                            }
+                            match serde_json::from_str::<Value>(line) {
+                                Ok(msg) => handle(&ctx, &msg).await,
+                                Err(_) => Some(rpc_error(Value::Null, -32700, "Parse error")),
+                            }
+                        });
+                    }
+                    None => open = false, // the client closed the pipe: finish what is running
+                },
+                Some(reply) = running.next(), if !running.is_empty() => {
+                    if let Some(r) = reply {
+                        if writeln!(out, "{r}").is_err() || out.flush().is_err() {
+                            break;
+                        }
+                    }
+                }
+                else => break,
+            }
+        }
+    });
+}
+
+/// Paid requests in flight. The balance difference tells what one request
+/// cost only while no other request of this connector overlaps with it.
+static FLIGHTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static FLIGHTS_STARTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+struct Flight {
+    alone_at_start: bool,
+    started_before: u64,
+}
+
+impl Flight {
+    fn begin() -> Flight {
+        use std::sync::atomic::Ordering::SeqCst;
+        Flight {
+            alone_at_start: FLIGHTS.fetch_add(1, SeqCst) == 0,
+            started_before: FLIGHTS_STARTED.fetch_add(1, SeqCst),
+        }
+    }
+    /// True when no other paid request ran at any time since `begin`.
+    fn alone(&self) -> bool {
+        self.alone_at_start && FLIGHTS_STARTED.load(std::sync::atomic::Ordering::SeqCst) == self.started_before + 1
+    }
+}
+
+impl Drop for Flight {
+    fn drop(&mut self) {
+        FLIGHTS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -686,10 +745,11 @@ async fn spendable(ctx: &Ctx) -> Option<f64> {
 /// A request failed. The grid may have billed it all the same (a job that
 /// timed out on the worker, for instance), so compare the balance with what
 /// it was before, book the difference and say so.
-async fn settle_failed(ctx: &Ctx, reserved: f64, before: Option<f64>, err: String) -> String {
+async fn settle_failed(ctx: &Ctx, reserved: f64, before: Option<f64>, flight: &Flight, err: String) -> String {
     let after = spendable(ctx).await;
     let mut charged = match (before, after) {
-        (Some(b), Some(a)) if b - a > 0.000_000_5 => b - a,
+        // with other requests running, the difference is not this request's
+        (Some(b), Some(a)) if b - a > 0.000_000_5 && flight.alone() => b - a,
         _ => 0.0,
     };
     // other spending of the account may run at the same time: never book more
@@ -768,6 +828,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     let input_est = approx_tokens(prompt) + system.map(approx_tokens).unwrap_or(0);
     let before = if model == "auto" { worst_text_rates(&models) } else { text_rates(&models, &model) };
     let reserved = ctx.reserve(before.map(|r| text_cost(r, input_est, max_tokens)))?;
+    let flight = Flight::begin();
     let credit_before = spendable(ctx).await;
     let (sent_at, clock) = (epoch_now(), std::time::Instant::now());
 
@@ -808,7 +869,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     };
     let d = match d {
         Ok(d) => d,
-        Err(err) => return Err(settle_failed(ctx, reserved, credit_before, err).await),
+        Err(err) => return Err(settle_failed(ctx, reserved, credit_before, &flight, err).await),
     };
 
     let took = clock.elapsed().as_secs_f64();
@@ -834,14 +895,18 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     // The grid bills its own token count, which is lower than the count the
     // model reports, so the balance tells the truth. The difference is only
     // taken when it is plausible for this one request.
-    let charged = match (credit_before, spendable(ctx).await) {
-        (Some(b), Some(a)) if b - a > 0.000_000_5 => Some(b - a),
+    let balance_after = spendable(ctx).await;
+    let alone = flight.alone();
+    drop(flight);
+    let charged = match (credit_before, balance_after) {
+        (Some(b), Some(a)) if b - a > 0.000_000_5 && alone => Some(b - a),
         _ => None,
     }
     .filter(|c| cost.map(|list| *c <= list * 1.5 + 0.000_001).unwrap_or(reserved <= 0.0 || *c <= reserved));
     match (charged, cost) {
         (Some(c), Some(list)) => note.push_str(&format!(" · charged {} (balance before and after; list price for the reported tokens would be {})", money(c), money(list))),
         (Some(c), None) => note.push_str(&format!(" · charged {} (balance before and after)", money(c))),
+        (None, Some(list)) if !alone => note.push_str(&format!(" · cost at most {} (list price; several requests ran at once, so the exact charge cannot be told apart; the grid usually charges less)", money(list))),
         (None, Some(list)) => note.push_str(&format!(" · cost about {} (list price; the grid usually charges a little less)", money(list))),
         (None, None) => {}
     }
@@ -1188,12 +1253,13 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
     };
     let per_image = book_rates(&price_book(ctx).await, &model).and_then(|r| r["per_image_usd"].as_f64());
     let reserved = ctx.reserve(per_image.map(|p| p * n as f64))?;
+    let flight = Flight::begin();
     let credit_before = spendable(ctx).await;
     let body = json!({ "model": model, "prompt": prompt, "n": n, "size": size });
     let d = match post_json(ctx, "/images/generations", &body, 900).await {
         Ok(d) => d,
         Err(err) => {
-            return Err(settle_failed(ctx, reserved, credit_before, err).await);
+            return Err(settle_failed(ctx, reserved, credit_before, &flight, err).await);
         }
     };
     let items = d["data"].as_array().cloned().unwrap_or_default();
