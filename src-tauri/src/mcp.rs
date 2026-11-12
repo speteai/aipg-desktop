@@ -688,7 +688,7 @@ fn api_failure(status: u16, body: &str) -> String {
         429 => " The grid is rate-limiting this account; wait before trying again.",
         _ => "",
     };
-    format!("Grid request failed (HTTP {status}): {detail}.{hint}")
+    format!("Grid request failed (HTTP {status}): {}.{hint}", detail.trim_end_matches('.'))
 }
 
 async fn get_json(ctx: &Ctx, path: &str, auth: bool) -> Result<Value, String> {
@@ -727,6 +727,86 @@ async fn post_json(ctx: &Ctx, path: &str, body: &Value, secs: u64) -> Result<Val
     serde_json::from_str(&text).map_err(|e| format!("Unexpected grid response: {e}"))
 }
 
+/// A chat completion, requested as a stream and put together into the shape of
+/// a plain response. The grid sits behind a proxy that gives up on a request
+/// after 120 seconds without a byte; a plain request sends nothing until the
+/// whole answer is ready, so every job that ran longer failed (and was billed).
+/// A stream delivers the tokens as they come and survives long answers.
+async fn post_chat(ctx: &Ctx, body: &Value, secs: u64) -> Result<Value, String> {
+    use futures_util::StreamExt;
+    let mut body = body.clone();
+    body["stream"] = json!(true);
+    let r = ctx
+        .http
+        .post(format!("{API}/chat/completions"))
+        .bearer_auth(ctx.bearer().await?)
+        .timeout(Duration::from_secs(secs))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach the grid: {e}"))?;
+    let status = r.status();
+    if !status.is_success() {
+        let text = r.text().await.unwrap_or_default();
+        return Err(api_failure(status.as_u16(), &text));
+    }
+    let (mut content, mut reasoning) = (String::new(), String::new());
+    let mut out = json!({});
+    let mut finish = Value::Null;
+    let mut events = 0u32;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stream = r.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("The connection to the grid broke off while the answer was coming in (timeout or network): {e}"))?;
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
+            let raw: Vec<u8> = buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&raw);
+            let Some(data) = line.trim().strip_prefix("data:") else { continue };
+            let data = data.trim();
+            if data.is_empty() || data == "[DONE]" {
+                continue;
+            }
+            let Ok(j) = serde_json::from_str::<Value>(data) else { continue };
+            if let Some(err) = j.get("error") {
+                let msg = err["message"].as_str().map(str::to_string).unwrap_or_else(|| err.to_string());
+                // keep the wording the callers look for
+                let code = if err["type"] == "invalid_request_error" { "HTTP 400" } else { "upstream error" };
+                return Err(format!("Grid request failed ({code}): {msg}."));
+            }
+            events += 1;
+            for k in ["id", "model"] {
+                if j[k].is_string() {
+                    out[k] = j[k].clone();
+                }
+            }
+            for k in ["usage", "grid"] {
+                if j[k].is_object() {
+                    out[k] = j[k].clone();
+                }
+            }
+            let c = &j["choices"][0];
+            if let Some(t) = c["delta"]["content"].as_str() {
+                content.push_str(t);
+            }
+            if let Some(t) = c["delta"]["reasoning_content"].as_str().or_else(|| c["delta"]["reasoning"].as_str()) {
+                reasoning.push_str(t);
+            }
+            if c["finish_reason"].is_string() {
+                finish = c["finish_reason"].clone();
+            }
+        }
+    }
+    if events == 0 {
+        return Err("The grid closed the connection without an answer.".into());
+    }
+    if finish.is_null() {
+        finish = json!("cut off: the stream ended before the model finished");
+    }
+    out["choices"] = json!([{ "message": { "role": "assistant", "content": content, "reasoning_content": reasoning }, "finish_reason": finish }]);
+    Ok(out)
+}
+
 /// Many grid models think before they answer and the grid cannot switch that
 /// off for every backend. With a small budget the thinking uses all of it and
 /// no answer comes back, although the request is billed.
@@ -760,7 +840,7 @@ async fn settle_failed(ctx: &Ctx, reserved: f64, before: Option<f64>, flight: &F
     ctx.settle(reserved, charged, charged > 0.0);
     let mut out = err;
     let low = out.to_lowercase();
-    if low.contains("timeout") || low.contains("timed out") || low.contains("(http 504)") || low.contains("(http 502)") || low.contains("(http 503)") {
+    if low.contains("timeout") || low.contains("timed out") || low.contains("(http 504)") || low.contains("(http 502)") || low.contains("(http 503)") || low.contains("(http 524)") || low.contains("broke off") {
         out.push_str(" The worker may still have been loading the model into memory (a cold start can take a minute); one retry usually succeeds.");
     }
     if charged > 0.0 {
@@ -884,17 +964,17 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
             } else {
                 with["reasoning_effort"] = json!(level);
             }
-            match post_json(ctx, "/chat/completions", &with, 600).await {
+            match post_chat(ctx, &with, 600).await {
                 Ok(d) => Ok(d),
                 // a backend that rejects the option outright: send it plain
                 Err(err) if err.contains("(HTTP 400)") || err.contains("(HTTP 422)") => {
                     reasoning_note = " · the reasoning option was rejected and left out";
-                    post_json(ctx, "/chat/completions", &body, 600).await
+                    post_chat(ctx, &body, 600).await
                 }
                 Err(err) => Err(err),
             }
         }
-        None => post_json(ctx, "/chat/completions", &body, 600).await,
+        None => post_chat(ctx, &body, 600).await,
     };
     let d = match d {
         Ok(d) => d,
