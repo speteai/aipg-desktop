@@ -121,7 +121,7 @@ function fmtBytes(n) {
 async function loadOverview() {
   const hasKey = !!apiKey();
   $("#needkey").style.display = hasKey ? "none" : "";
-  if (!hasKey) { setConn("", "not connected"); $("#stats").innerHTML = ""; $("#workers").innerHTML = '<p class="muted">—</p>'; return; }
+  if (!hasKey) { setConn("", "not connected"); $("#stats").innerHTML = ""; $("#workers").innerHTML = '<p class="muted">—</p>'; renderHolder(null); return; }
   setConn("", "loading…");
   try {
     const [w, c] = await Promise.all([api("/account/workers"), api("/account/credits")]);
@@ -138,6 +138,7 @@ async function loadOverview() {
     renderWorkers(w.workers || []);
     $("#stamp").textContent = "Updated " + new Date().toLocaleTimeString();
     checkTransitions(w.workers || []);
+    renderHolder(c.free);
   } catch (e) {
     if (e.message === "no-key") return;
     setConn("err", e.status === 401 ? (gridKey() ? "bad API key" : "sign-in rejected") : "error");
@@ -171,6 +172,70 @@ function holderNote(f) {
   const all = tiers.map((t) => `${t.min.toLocaleString("en-US")} AIPG: ${usd(t.usd)} a day`).join(" · ");
   return `<span title="${esc(all)}. Counted from the UTC day after the tokens arrive.">` +
     `hold ${tiers[0].min.toLocaleString("en-US")}+ AIPG in your sign-in wallet for ${amount} more a day</span>`;
+}
+/* What holding AIPG brings, per tier. Tiers and today's bonus come from the
+   credit summary; the AIPG rate is the one the grid uses for deposits and the
+   image price is the cheapest image model online. Both are optional: without
+   them the columns that need them are left out. */
+function holderTiers(f) {
+  return (Array.isArray(f && f.holder_tiers) ? f.holder_tiers : [])
+    .map((t) => ({ min: Number(t && t.min_aipg), usd: Number(t && t.daily_usd) }))
+    .filter((t) => t.min > 0 && t.usd > 0).sort((a, b) => a.min - b.min);
+}
+function holderRows(tiers, rate, imagePrice) {
+  return tiers.map((t) => {
+    const cost = rate > 0 ? t.min * rate : null;
+    return {
+      min: t.min, day: t.usd, month: t.usd * 30,
+      images: imagePrice > 0 ? Math.floor(t.usd / imagePrice + 1e-9) : null,
+      cost, days: cost != null ? Math.ceil(cost / t.usd - 1e-9) : null,
+    };
+  });
+}
+let HOLDER_SEQ = 0;
+async function renderHolder(f) {
+  const box = $("#holder"), tiers = holderTiers(f);
+  if (!box) return;
+  if (!tiers.length) { box.style.display = "none"; return; }
+  box.style.display = "";
+  const usd = (n) => "$" + Number(n).toFixed(2);
+  const bonus = Number(f.holder_bonus_usd) || 0;
+  $("#holder-now").textContent = bonus > 0
+    ? `Your sign-in wallet qualifies today: ${usd(bonus)} of today's free credit is for holding AIPG.`
+    : "Your account receives no holder credit today.";
+  const seq = ++HOLDER_SEQ;
+  const draw = (rate, until, image) => {
+    if (seq !== HOLDER_SEQ) return;
+    const rows = holderRows(tiers, rate, image && image.price);
+    const head = ["Hold in your wallet", "Extra per day", "In 30 days"]
+      .concat(image ? ["Images per day"] : []).concat(rate > 0 ? ["Tokens cost about", "Credit equals that after"] : []);
+    $("#holder-t").innerHTML = `<thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>` + rows.map((r) =>
+      `<tr><td>${r.min.toLocaleString("en-US")} AIPG</td><td>${usd(r.day)}</td><td>${usd(r.month)}</td>` +
+      (image ? `<td>${r.images}</td>` : "") +
+      (rate > 0 ? `<td>${usd(r.cost)}</td><td>${r.days} days</td>` : "") + "</tr>").join("") + "</tbody>";
+    const parts = [];
+    if (image) parts.push(`Images counted with ${esc(image.name)} at $${image.price} each, the cheapest image model online right now.`);
+    if (rate > 0) {
+      parts.push(`Token cost at $${rate.toFixed(4)} per AIPG, the rate the grid uses for AIPG deposits` +
+        (until ? ` (valid until ${new Date(until).toLocaleDateString()})` : "") +
+        "; the market price can differ, and the tokens keep their own value and risk.");
+    }
+    $("#holder-rate").textContent = parts.join(" ");
+  };
+  draw(0, null, null);
+  const [dep, pricing, status] = await Promise.all([
+    api("/account/deposits/config").catch(() => null),
+    api("/pricing", false).catch(() => null),
+    api("/status/models", false).catch(() => null),
+  ]);
+  const a = ((dep && dep.assets) || []).find((x) => x && x.asset === "AIPG" && x.enabled && Number(x.price_micro) > 0);
+  const online = new Set((Array.isArray(status) ? status : []).filter((m) => m && m.type === "image" && (m.count || 0) > 0)
+    .map((m) => String(m.name).toLowerCase()));
+  const image = (((pricing && pricing.price_book && pricing.price_book.models) || [])
+    .map((m) => ({ name: String(m.model), price: Number(m.rates && m.rates.per_image_usd) }))
+    .filter((m) => m.price > 0 && online.has(m.name.toLowerCase()))
+    .sort((x, y) => x.price - y.price))[0] || null;
+  draw(a ? Number(a.price_micro) / 1e6 : 0, a && a.price_valid_until, image);
 }
 function creditNote(c) {
   const parts = [];
