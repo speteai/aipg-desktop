@@ -31,6 +31,16 @@
         <button class="btn primary" id="needkey-go" style="margin-left:8px">Connect</button>
       </div>
       <div class="stats" id="stats"></div>
+      <details class="adv" id="holder" style="display:none">
+        <summary>Holding AIPG: extra free credit every day</summary>
+        <p class="hint" id="holder-now"></p>
+        <div class="tablewrap"><table id="holder-t"></table></div>
+        <p class="hint" id="holder-rate"></p>
+        <p class="hint">The tokens stay yours; the grid only reads the balance of your sign-in wallet on Base, at the last
+          block before midnight UTC. The first allowance therefore comes the day after the tokens arrive. Each wallet
+          counts on its own, balances are not added together. The network grants a limited total per day, so late in
+          a day the allowance can be used up. The credit can only be spent on the grid; it cannot be withdrawn.</p>
+      </details>
       <button id="ovwork" class="ovwork" style="display:none" title="Open “Run a worker”">
         <span class="ovcells" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
         <span class="ovtext"><span id="ovwork-t" class="ovwork-t"></span><span id="ovwork-s" class="ovwork-s"></span></span>
