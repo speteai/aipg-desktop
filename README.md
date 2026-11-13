@@ -62,6 +62,8 @@ Chat works right away — running a worker is optional and needs an API key.
   - shows live download progress (GB and %), lets you pick **where models are stored**,
     and lists installed models with their size so you can delete what you no longer need,
   - restarts the worker automatically if it crashes.
+- **OpenClaw** — Connect shows the one-line command that gives OpenClaw the grid tools through the local connector
+  (tested with OpenClaw 2026.11.3: balance, council and a masked chat call).
 - **Council** — a chat switch (and the connector tool `grid_council`) that puts one question to every text model
   online. Each answers on its own, one writes a joint answer and states whether the others agree, agree in part or
   contradict each other; the single answers can be opened. Agreement is not proof: models can share a mistake.

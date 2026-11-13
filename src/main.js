@@ -2371,6 +2371,7 @@ function renderConnect(st) {
     (st.daily_limit_usd ? ` of ${fm(st.daily_limit_usd)}.` : ". No limit set.") +
     " A request is refused before it is sent if its worst case would exceed the limit. Amounts are estimates from list prices.";
   $("#cn-command").textContent = st.command;
+  $("#cn-openclaw").textContent = st.openclaw_command || "";
   $("#cn-snippet").textContent = st.snippet;
 }
 async function loadConnect() {
@@ -2402,6 +2403,7 @@ async function loadConnect() {
     $("#cn-claude-add").onclick = () => run("connector_claude_add", {}, "Added. Restart Claude Desktop.");
     $("#cn-claude-remove").onclick = () => run("connector_claude_remove", {}, "Removed from Claude Desktop");
     $("#cn-copy-command").onclick = () => copyText($("#cn-command").textContent, "Command copied");
+    $("#cn-copy-openclaw").onclick = () => copyText($("#cn-openclaw").textContent, "Command copied");
     $("#cn-copy-snippet").onclick = () => copyText($("#cn-snippet").textContent, "Config copied");
     wireCodingTools();
   }

@@ -90,6 +90,8 @@ pub struct ConnectorStatus {
     via: String,
     /// One-line command for Claude Code.
     command: String,
+    /// One-line command for OpenClaw.
+    openclaw_command: String,
     /// Generic `mcpServers` snippet for other MCP clients.
     snippet: String,
 }
@@ -120,6 +122,8 @@ pub fn connector_status(app: AppHandle) -> Result<ConnectorStatus, String> {
         claude_registered: registered,
         claude_config: cfg_path.to_string_lossy().into_owned(),
         command: format!("claude mcp add {SERVER} -- \"{launcher}\" --mcp \"{key}\""),
+        // `--arg=--mcp`: with a space OpenClaw would read --mcp as its own option
+        openclaw_command: format!("openclaw mcp add {SERVER} --command \"{launcher}\" --arg=--mcp --arg \"{key}\" --parallel"),
         snippet: serde_json::to_string_pretty(&json!({ "mcpServers": { SERVER: entry } }))
             .map_err(e)?,
         launcher,
