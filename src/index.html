@@ -77,6 +77,7 @@
             </label>
             <label class="seg" title="Summarize older messages instead of dropping them"><input type="checkbox" id="chatsum"> Summarize</label>
             <label class="seg" title="Check every grid reply: a second model answers the same question and the two answers are compared. Costs two extra requests per reply. You can also check single replies with the link below them."><input type="checkbox" id="chatcheck"> Cross-check</label>
+            <label class="seg" title="Council: every text model that is online answers the question on its own, then one of them writes a joint answer and says where the others agree or differ. One request per model plus one for the joint answer. Agreement is not proof: models can share the same mistake."><input type="checkbox" id="chatcouncil"> Council</label>
             <label class="seg" title="This chat never leaves this computer: it can only use a local model"><input type="checkbox" id="chatlocal"> Local only</label>
           </div>
           <p class="hint" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>

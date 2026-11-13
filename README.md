@@ -62,6 +62,9 @@ Chat works right away — running a worker is optional and needs an API key.
   - shows live download progress (GB and %), lets you pick **where models are stored**,
     and lists installed models with their size so you can delete what you no longer need,
   - restarts the worker automatically if it crashes.
+- **Council** — a chat switch (and the connector tool `grid_council`) that puts one question to every text model
+  online. Each answers on its own, one writes a joint answer and states whether the others agree, agree in part or
+  contradict each other; the single answers can be opened. Agreement is not proof: models can share a mistake.
 - **Coding tools** — Connect shows ready-to-copy settings for using a grid model in OpenAI-compatible coding tools
   (Cline, Roo Code, Kilo, Continue, Cursor, aider) and, experimentally, in Claude Code. The app checks live which
   models accept Claude Code. Source code sent this way is processed in plain text by independent operators.
