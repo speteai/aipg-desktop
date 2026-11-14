@@ -192,12 +192,68 @@ function holderRows(tiers, rate, imagePrice) {
     };
   });
 }
+/* The one place AIPG trades: Uniswap on Base. The address is fixed here and
+   never taken from a server, so a wrong answer cannot send anyone to a fake. */
+const AIPG_TOKEN = "0xa1c0deCaFE3E9Bf06A5F29B7015CD373a9854608";
+const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const AIPG_SWAP = `https://app.uniswap.org/swap?chain=base&inputCurrency=${USDC_BASE}&outputCurrency=${AIPG_TOKEN}`;
+const AIPG_CHART = `https://dexscreener.com/base/${AIPG_TOKEN}`;
+/* Picks the deepest AIPG pool on Base from DexScreener's answer. */
+function aipgMarket(d) {
+  const pairs = (Array.isArray(d && d.pairs) ? d.pairs : []).filter((p) => p && p.chainId === "base" &&
+    p.baseToken && String(p.baseToken.address).toLowerCase() === AIPG_TOKEN.toLowerCase() && Number(p.priceUsd) > 0);
+  pairs.sort((a, b) => (Number(b.liquidity && b.liquidity.usd) || 0) - (Number(a.liquidity && a.liquidity.usd) || 0));
+  const p = pairs[0];
+  if (!p) return null;
+  return { price: Number(p.priceUsd), pool: Number(p.liquidity && p.liquidity.usd) || 0, day: Number(p.volume && p.volume.h24) || 0 };
+}
+function marketText(m, tiers) {
+  if (!m) return "AIPG trades on Uniswap on Base against USDC. The current market figures could not be read.";
+  const usd0 = (n) => "$" + Math.round(n).toLocaleString("en-US");
+  let t = `Market now: $${m.price.toFixed(6)} per AIPG, about ${usd0(m.pool)} in the pool, ${usd0(m.day)} traded in the last 24 hours.`;
+  if (m.pool > 0 && tiers.length) {
+    const parts = tiers.map((x) => {
+      const cost = x.min * m.price, share = cost / m.pool * 100;
+      return `${x.min.toLocaleString("en-US")} AIPG is about ${cost < 100 ? "$" + cost.toFixed(2) : usd0(cost)} (${share < 10 ? share.toFixed(1) : Math.round(share)}% of the pool)`;
+    });
+    t += ` At that price ${parts.join(", ")}. The pool is small: a purchase that is more than a few percent of it moves the price against you, so buy larger amounts in parts.`;
+  }
+  return t;
+}
+let HOLDER_MARKET_AT = 0;
+async function loadHolderMarket(tiers) {
+  if (Date.now() - HOLDER_MARKET_AT < 60000) return;
+  HOLDER_MARKET_AT = Date.now();
+  let m = null;
+  try {
+    const r = await fetch("https://api.dexscreener.com/latest/dex/tokens/" + AIPG_TOKEN, { headers: { Accept: "application/json" } });
+    if (r.ok) m = aipgMarket(await r.json());
+  } catch (e) {}
+  const el = $("#holder-market");
+  if (el) el.textContent = marketText(m, tiers);
+}
+let HOLDER_TIERS = [];
+function initHolderMarket() {
+  const box = $("#holder");
+  if (!box || box.dataset.ready) return;
+  box.dataset.ready = "1";
+  $("#holder-addr").textContent = AIPG_TOKEN;
+  $("#holder-buy").onclick = () => openExternal(AIPG_SWAP);
+  $("#holder-chart").onclick = () => openExternal(AIPG_CHART);
+  $("#holder-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(AIPG_TOKEN); toast("Token address copied"); } catch (e) { toast("Could not copy"); }
+  };
+  box.addEventListener("toggle", () => { if (box.open) loadHolderMarket(HOLDER_TIERS); });
+}
 let HOLDER_SEQ = 0;
 async function renderHolder(f) {
   const box = $("#holder"), tiers = holderTiers(f);
   if (!box) return;
   if (!tiers.length) { box.style.display = "none"; return; }
   box.style.display = "";
+  HOLDER_TIERS = tiers;
+  initHolderMarket();
+  if (box.open) loadHolderMarket(tiers);
   const usd = (n) => "$" + Number(n).toFixed(2);
   const bonus = Number(f.holder_bonus_usd) || 0;
   $("#holder-now").textContent = bonus > 0

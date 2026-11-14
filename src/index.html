@@ -36,6 +36,16 @@
         <p class="hint" id="holder-now"></p>
         <div class="tablewrap"><table id="holder-t"></table></div>
         <p class="hint" id="holder-rate"></p>
+        <h2 class="sec">Where to get AIPG</h2>
+        <p class="hint" id="holder-market">AIPG trades on Uniswap on Base against USDC.</p>
+        <div class="row">
+          <button class="btn" id="holder-buy">Open on Uniswap</button>
+          <button class="btn ghost" id="holder-copy">Copy token address</button>
+          <button class="btn ghost" id="holder-chart">Price chart</button>
+        </div>
+        <p class="hint">Token address on Base: <code id="holder-addr"></code>. Check it before you swap: tokens with the
+          same name and another address are not AIPG. The market figures come from DexScreener and are fetched only
+          while this section is open.</p>
         <p class="hint">The tokens stay yours; the grid only reads the balance of your sign-in wallet on Base, at the last
           block before midnight UTC. The first allowance therefore comes the day after the tokens arrive. Each wallet
           counts on its own, balances are not added together. The network grants a limited total per day, so late in
