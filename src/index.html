@@ -255,6 +255,33 @@
         <div class="row"><button class="btn primary" id="wlim-save">Save</button></div>
       </details>
 
+      <details class="adv" id="wmedia">
+        <summary>Image and video worker, with your ComfyUI <span class="chip" id="wm-state">off</span> <span class="muted">experimental</span></summary>
+        <p class="hint">Earns on image and video jobs with a ComfyUI you already run. The app does not install ComfyUI
+          or model files: those are tens of gigabytes and partly need a Hugging Face login. It checks which of the
+          grid's paid models your ComfyUI can serve, sets up the grid's official media worker, and runs it. Before a
+          model is offered, the worker renders one test picture or clip with it on this machine; that takes GPU time
+          at every start. It runs next to the text worker, under its own name, one job at a time, and follows the
+          working hours set above.</p>
+        <div class="row">
+          <input id="wm-url" type="text" placeholder="http://127.0.0.1:8188" autocomplete="off" spellcheck="false">
+          <button class="btn" id="wm-check">Check my ComfyUI</button>
+        </div>
+        <p class="hint" id="wm-msg"></p>
+        <div id="wm-models"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="wm-setup">Set up the media worker</button>
+          <button class="btn primary" id="wm-start" disabled>Start</button>
+          <button class="btn ghost" id="wm-stop" disabled>Stop</button>
+        </div>
+        <p class="hint" id="wm-setupmsg"></p>
+        <p class="hint" id="wm-offer"></p>
+        <pre id="wm-log" class="log" style="display:none"></pre>
+        <p class="hint">Sound and music (ACE-Step) cannot be offered yet: the grid has not opened that kind of worker.
+          It first collects benchmark results from graphics cards with 12 GB or more.
+          <a href="#" data-ext="https://github.com/AIPowerGrid/grid-media-worker/issues/8">Status of that test round →</a></p>
+      </details>
+
       <!-- one-click -->
       <div class="field" style="max-width:none">
         <div class="row">

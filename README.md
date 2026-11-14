@@ -70,6 +70,12 @@ Chat works right away — running a worker is optional and needs an API key.
   - **check on the grid**: whether the grid lists the worker as online, and a test request that shows which worker
     answered it.
   - a notice when the account has **no payout address**, since nothing is paid out without one.
+- **Image and video worker (experimental)** — for people who already run ComfyUI. The app compares what your ComfyUI
+  has (nodes, model files) with what the grid's paid image and video models need, sets up the grid's official
+  [media worker](https://github.com/AIPowerGrid/grid-media-worker) in the app's data folder (a fixed commit and a fixed
+  `uv` release, both SHA-256 checked; Python packages exactly as its lock file names them) and runs it. The worker
+  offers a model only after a test render on your machine has worked. The app does not install ComfyUI or model files.
+  Sound and music workers are not open on the grid yet.
 - **OpenClaw** — Connect shows the one-line command that gives OpenClaw the grid tools through the local connector
   (tested with OpenClaw 2026.11.3: balance, council and a masked chat call).
 - **Council** — a chat switch (and the connector tool `grid_council`) that puts one question to every text model

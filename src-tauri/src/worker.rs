@@ -41,6 +41,9 @@ const OLLAMA_TAG: &str = "v0.40.15";
 pub struct Procs {
     worker: Mutex<Option<Child>>,
     ollama: Mutex<Option<Child>>,
+    /// the image/video worker (see media.rs)
+    pub(crate) media: Mutex<Option<Child>>,
+    pub(crate) media_gen: std::sync::atomic::AtomicU64,
     /// Bumped on every worker start, so the log reader of an older worker
     /// can never clear (and thereby kill) a newer one.
     worker_gen: std::sync::atomic::AtomicU64,
@@ -55,7 +58,7 @@ fn e<T: std::fmt::Display>(x: T) -> String {
 /// No-op on other platforms.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-fn quiet(cmd: &mut Command) -> &mut Command {
+pub(crate) fn quiet(cmd: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -291,7 +294,7 @@ fn extract_single_from_zip(bytes: &[u8], dest: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-fn make_executable(_p: &PathBuf) -> Result<(), String> {
+pub(crate) fn make_executable(_p: &PathBuf) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -305,7 +308,7 @@ fn make_executable(_p: &PathBuf) -> Result<(), String> {
 /* ------------------------- managed Ollama ------------------------- */
 
 #[derive(Clone, Copy)]
-enum Arch {
+pub(crate) enum Arch {
     Tgz,
     Zst,
     Zip,
@@ -405,7 +408,7 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
     Ok(bin.to_string_lossy().into_owned())
 }
 
-fn extract_archive(archive: &PathBuf, dist: &PathBuf, kind: Arch) -> Result<(), String> {
+pub(crate) fn extract_archive(archive: &PathBuf, dist: &PathBuf, kind: Arch) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(dist);
     std::fs::create_dir_all(dist).map_err(e)?;
     let f = std::fs::File::open(archive).map_err(e)?;
@@ -928,6 +931,20 @@ impl WorkerSettings {
             window["days"] = serde_json::json!(self.schedule_days);
         }
         Some(serde_json::json!([window, { "concurrency": 0 }]).to_string())
+    }
+}
+
+/// The working hours for the image/video worker, which serves one job at a time.
+pub(crate) fn media_schedule(app: &AppHandle) -> Option<String> {
+    let mut s = worker_settings_read(app);
+    s.concurrency = 1;
+    s.schedule_json()
+}
+
+/// The key to blank in log lines.
+pub(crate) fn remember_key(key: &str) {
+    if let Ok(mut k) = REDACT_KEY.lock() {
+        *k = key.to_string();
     }
 }
 
@@ -1766,7 +1783,7 @@ pub async fn ollama_settings_set(
 /// behind (crash, forced close). They live under the app's data folder, so
 /// nothing the user installed themselves is touched.
 pub fn sweep_orphans(app: &AppHandle) -> usize {
-    let dirs = [worker_dir(app), ollama_dist(app)];
+    let dirs = [worker_dir(app), ollama_dist(app), data_dir(app).join("media")];
     let mut sys = sysinfo::System::new();
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     let me = sysinfo::get_current_pid().ok();
@@ -2112,4 +2129,5 @@ pub async fn kill_all(procs: &Procs) {
     if let Some(mut c) = procs.ollama.lock().await.take() {
         let _ = c.start_kill();
     }
+    crate::media::stop(procs).await;
 }

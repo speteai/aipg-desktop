@@ -9,6 +9,7 @@ mod account;
 mod auth;
 mod connector;
 mod job;
+mod media;
 mod mcp;
 mod privacy;
 mod worker;
@@ -129,6 +130,11 @@ pub fn run() {
             worker::backend_detect,
             worker::backend_models,
             worker::backend_test,
+            media::media_status,
+            media::media_setup,
+            media::comfy_check,
+            media::media_start,
+            media::media_stop,
             worker::models_dir_get,
             worker::ollama_settings,
             worker::ollama_settings_set,

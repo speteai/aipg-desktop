@@ -1026,6 +1026,7 @@ async function loadWorker() {
   loadOllamaSettings();
   loadWorkerSettings();
   loadPayoutWallet();
+  mediaLoad();
 }
 
 function syncRunButtons() {
@@ -1185,6 +1186,7 @@ function wireWorker() {
   WORKER_WIRED = true;
   wireModelPicker();
   wireWorkerSettings();
+  wireMedia();
   $("#ollama-ctx").onchange = saveOllamaSettings;
   $("#ollama-own").onchange = saveOllamaSettings;
   $("#ollama-keep").onchange = saveOllamaSettings;
@@ -1436,6 +1438,120 @@ function wireWorkerSettings() {
   $("#wtest-btn").onclick = gridTestRequest;
   // the status chip follows the working hours
   setInterval(() => { if (WORKER_RUNNING && wset().schedule_on) syncRunButtons(); }, 60000);
+}
+
+/* ---------- image and video worker (the user's ComfyUI + the grid's bridge) ---------- */
+let MEDIA = { installed: false, running: false, supported: true }, MEDIA_REPORT = null, MEDIA_WIRED = false;
+function mediaName() { return workerName() + "-media"; }
+function mediaPicked() { try { return JSON.parse(get("aipg_media_models") || "[]"); } catch (e) { return []; } }
+function mediaMsg(sel, text, cls) { const m = $(sel); m.textContent = text; m.className = "hint" + (cls ? " " + cls : ""); }
+function mediaSync() {
+  const chip = $("#wm-state");
+  chip.textContent = MEDIA.running ? "running" : "off";
+  chip.className = "chip" + (MEDIA.running ? " run" : "");
+  const ready = MEDIA_REPORT ? MEDIA_REPORT.models.filter((m) => m.ready).map((m) => m.name) : [];
+  const picked = mediaPicked().filter((n) => ready.includes(n));
+  $("#wm-setup").disabled = MEDIA.running || !MEDIA.supported;
+  $("#wm-setup").textContent = MEDIA.installed ? "Set up again" : "Set up the media worker";
+  $("#wm-start").disabled = MEDIA.running || !MEDIA.installed || !picked.length;
+  $("#wm-stop").disabled = !MEDIA.running;
+  if (!MEDIA.supported) mediaMsg("#wm-setupmsg", "There is no setup for this system.", "warn");
+  else if (!MEDIA.running && !MEDIA.installed) mediaMsg("#wm-setupmsg", "Not set up yet. The setup downloads about 300 MB into the app's data folder: a Python runtime and the grid's media worker, both checked against checksums fixed in this app version.");
+  else if (!MEDIA.running && !MEDIA_REPORT) mediaMsg("#wm-setupmsg", "Set up. Check your ComfyUI to choose the models to offer.");
+  else if (!MEDIA.running && !picked.length) mediaMsg("#wm-setupmsg", "Set up. Tick at least one model that is ready.");
+  else if (!MEDIA.running) mediaMsg("#wm-setupmsg", `Ready to start as ${mediaName()} with ${picked.join(", ")}.`);
+}
+async function mediaLoad() {
+  if (!TAURI.core) return;
+  $("#wm-url").value = get("aipg_comfy_url") || "http://127.0.0.1:8188";
+  try { MEDIA = await invoke("media_status"); } catch (e) {}
+  mediaSync();
+}
+function mediaRenderModels() {
+  const r = MEDIA_REPORT, box = $("#wm-models");
+  if (!r) { box.innerHTML = ""; return; }
+  const picked = mediaPicked();
+  const kind = { image: "image", video: "video", "3d": "3D" };
+  box.innerHTML = r.models.map((m, i) => {
+    const miss = [];
+    if (m.missing_files.length) miss.push("missing files: " + m.missing_files.join(", "));
+    if (m.missing_nodes.length) miss.push("missing nodes: " + m.missing_nodes.join(", "));
+    const others = m.workers_online ? `${m.workers_online} worker${m.workers_online === 1 ? "" : "s"} online` : "nobody serves it now";
+    return `<div class="lmrow"><label><input type="checkbox" data-mm="${i}" ${m.ready ? "" : "disabled"} ${m.ready && picked.includes(m.name) ? "checked" : ""}>
+      <span class="k">${esc(m.name)}</span></label>
+      <span class="muted">${esc(kind[m.kind] || m.kind)} · $${esc(m.price_usd)} ${esc(m.unit)} · ${esc(others)}</span>
+      <span class="${m.ready ? "chip run" : "muted"}">${m.ready ? "ready" : esc(miss.join(" · "))}</span></div>`;
+  }).join("") || '<p class="hint">The grid lists no paid image or video model right now.</p>';
+  $$("#wm-models [data-mm]").forEach((b) => (b.onchange = () => {
+    const name = r.models[Number(b.dataset.mm)].name, cur = mediaPicked().filter((n) => n !== name);
+    if (b.checked) cur.push(name);
+    set("aipg_media_models", JSON.stringify(cur)); mediaSync();
+  }));
+}
+async function mediaCheck() {
+  if (!gridKey()) return needWorkerKey();
+  const url = $("#wm-url").value.trim() || "http://127.0.0.1:8188";
+  set("aipg_comfy_url", url);
+  $("#wm-check").disabled = true; mediaMsg("#wm-msg", "Asking ComfyUI what it has, and the grid what its models need…");
+  try {
+    MEDIA_REPORT = await invoke("comfy_check", { url, apiKey: gridKey() });
+    const r = MEDIA_REPORT, n = r.models.filter((m) => m.ready).length;
+    const gpu = r.gpu ? `${r.gpu}${r.vram_gb ? `, ${r.vram_gb} GB` : ""}` : "no graphics card reported";
+    mediaMsg("#wm-msg", `ComfyUI ${r.version || ""} answers (${gpu}). ${n} of ${r.models.length} paid models have every file and node here.` +
+      (n ? " Ready means the files are there; whether your graphics card can run the model shows in the test render at the start." : " The missing files go into ComfyUI's model folders, the missing nodes are ComfyUI extensions."), n ? "" : "warn");
+  } catch (e) { MEDIA_REPORT = null; mediaMsg("#wm-msg", emsg(e), "warn"); }
+  $("#wm-check").disabled = false;
+  mediaRenderModels(); mediaSync();
+}
+function mediaLog(line) {
+  const el = $("#wm-log");
+  el.style.display = "";
+  const lines = (el.textContent ? el.textContent.split("\n") : []).concat(String(line));
+  el.textContent = lines.slice(-300).join("\n");
+  el.scrollTop = el.scrollHeight;
+  // the bridge says per model whether it offers it
+  const m = /(Advertising|Refusing to advertise) '([^']+)'[:\s—-]*(.*)$/.exec(line);
+  if (m) {
+    const ok = m[1] === "Advertising", o = $("#wm-offer");
+    o.textContent = (o.textContent ? o.textContent + " " : "") + (ok ? `✓ ${m[2]} is offered to the grid.` : `✗ ${m[2]} is not offered: ${m[3]}`);
+    o.className = "hint" + (ok ? "" : " warn");
+  }
+}
+function wireMedia() {
+  if (MEDIA_WIRED) return;
+  MEDIA_WIRED = true;
+  $("#wm-check").onclick = mediaCheck;
+  $("#wm-setup").onclick = async () => {
+    $("#wm-setup").disabled = true; mediaMsg("#wm-setupmsg", "Starting the setup…");
+    try { await invoke("media_setup"); toast("Media worker set up"); }
+    catch (e) { mediaMsg("#wm-setupmsg", emsg(e), "warn"); toast(emsg(e)); }
+    try { MEDIA = await invoke("media_status"); } catch (e) {}
+    if (MEDIA.installed) mediaSync(); else $("#wm-setup").disabled = false;
+  };
+  $("#wm-start").onclick = async () => {
+    if (!gridKey()) return needWorkerKey();
+    const ready = MEDIA_REPORT ? MEDIA_REPORT.models.filter((m) => m.ready).map((m) => m.name) : [];
+    const models = mediaPicked().filter((n) => ready.includes(n));
+    $("#wm-start").disabled = true; $("#wm-offer").textContent = ""; $("#wm-log").textContent = "";
+    try {
+      await invoke("media_start", { cfg: { api_key: gridKey(), worker_name: mediaName(), comfy_url: get("aipg_comfy_url") || "http://127.0.0.1:8188", models } });
+      MEDIA.running = true;
+      mediaMsg("#wm-setupmsg", `Running as ${mediaName()}. It now renders one test with each chosen model, then connects; that can take minutes.`);
+    } catch (e) { mediaMsg("#wm-setupmsg", emsg(e), "warn"); toast(emsg(e)); }
+    mediaSync();
+  };
+  $("#wm-stop").onclick = async () => {
+    $("#wm-stop").disabled = true;
+    try { await invoke("media_stop"); } catch (e) {}
+    MEDIA.running = false; mediaSync();
+  };
+  listen("media-setup", (e) => mediaMsg("#wm-setupmsg", String(e.payload)));
+  listen("media-log", (e) => mediaLog(String(e.payload)));
+  listen("media-exit", () => {
+    MEDIA.running = false; mediaSync();
+    mediaMsg("#wm-setupmsg", "The media worker stopped on its own. The lines below say why.", "warn");
+    nativeNotify("Media worker stopped", "The image and video worker process exited.");
+  });
 }
 
 /* ---------- is this worker really on the grid? ---------- */
