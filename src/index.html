@@ -174,6 +174,7 @@
       <div id="hwpanel" class="hwpanel"><span class="muted">Checking hardware…</span></div>
       <div id="hwfallback" class="banner" style="display:none"></div>
       <div id="wunsupported" class="banner" style="display:none"></div>
+      <div id="wpayout" class="banner" style="display:none"></div>
 
       <details class="adv" id="mpick">
         <summary>Choose a model for this machine</summary>
@@ -187,6 +188,71 @@
         </div>
         <p class="hint">Any model from the Ollama library works — enter its tag exactly as listed there.
           <a href="#" id="mpother-lib">Browse the Ollama library →</a></p>
+      </details>
+
+      <details class="adv" id="wsrv">
+        <summary>Model server: the app's Ollama, or one you already run <span class="muted" id="wsrv-now"></span></summary>
+        <p class="hint">By default the app runs its own Ollama. If you already run LM Studio, KoboldCpp, vLLM, SGLang,
+          LMDeploy or another server with an OpenAI-compatible API, the worker can use that instead, and no model
+          has to be downloaded twice. Your server stays as it is; the worker only sends it requests.</p>
+        <label style="display:block"><input type="radio" name="wsrvmode" value="ollama" checked> Ollama, managed by the app</label>
+        <label style="display:block;margin-top:4px"><input type="radio" name="wsrvmode" value="own"> My own server</label>
+        <div id="wsrv-own" style="display:none;margin-top:10px">
+          <div class="row">
+            <button class="btn" id="wsrv-find">Look for servers on this computer</button>
+          </div>
+          <div id="wsrv-found"></div>
+          <div class="row" style="margin-top:8px">
+            <input id="wsrv-url" type="text" placeholder="http://127.0.0.1:1234/v1" autocomplete="off" spellcheck="false">
+            <input id="wsrv-key" type="password" placeholder="Server key (only if yours asks for one)" autocomplete="off">
+          </div>
+          <div class="row" style="margin-top:8px;align-items:center">
+            <span class="k">Model</span>
+            <select id="wsrv-model" class="sel"><option value="">— list the models first —</option></select>
+            <button class="btn ghost" id="wsrv-load">List models</button>
+            <button class="btn ghost" id="wsrv-test">Test</button>
+          </div>
+          <p class="hint">Offer only a model your server really runs: the grid sends jobs for exactly that name, as
+            <code>grid/&lt;model&gt;</code>. Keep the server reachable from this computer only.</p>
+        </div>
+        <p class="hint" id="wsrv-msg"></p>
+        <div class="row"><button class="btn primary" id="wsrv-save">Save</button></div>
+      </details>
+
+      <details class="adv" id="wlim">
+        <summary>Working hours and load <span class="muted" id="wlim-now"></span></summary>
+        <div class="row" style="align-items:center">
+          <label><input type="checkbox" id="wlim-on"> Only work</label>
+          <select id="wlim-days" class="sel">
+            <option value="all">every day</option>
+            <option value="mon-fri">Monday to Friday</option>
+            <option value="sat-sun">Saturday and Sunday</option>
+          </select>
+          <span class="k">from</span><input id="wlim-start" type="time" class="sel" value="22:00">
+          <span class="k">to</span><input id="wlim-end" type="time" class="sel" value="08:00">
+        </div>
+        <p class="hint">Times are this computer's local time. Outside the window the worker stays started but takes no
+          jobs and shows as offline on the grid. A window may run past midnight; the days then count from the day it is
+          at each moment.</p>
+        <div class="row" style="align-items:center;margin-top:8px">
+          <span class="k">Jobs at once</span>
+          <select id="wlim-conc" class="sel">
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+          </select>
+          <span class="k">Answer length</span>
+          <select id="wlim-len" class="sel">
+            <option value="0">worker default</option>
+            <option value="2048">2048 tokens</option>
+            <option value="4096">4096 tokens</option>
+            <option value="8192">8192 tokens</option>
+            <option value="16384">16384 tokens</option>
+          </select>
+        </div>
+        <p class="hint">More than one job at once needs graphics memory for each: with the app's Ollama the context
+          length is reserved once per job. The answer length applies when a request names none. The context length is
+          set under “Advanced steps” for the app's Ollama; your own server reports its own.</p>
+        <p class="hint" id="wlim-msg"></p>
+        <div class="row"><button class="btn primary" id="wlim-save">Save</button></div>
       </details>
 
       <!-- one-click -->
@@ -210,6 +276,11 @@
       <div id="wpbar" class="pbar" style="display:none"><span></span></div>
       <p class="statusline" id="wstatusline"></p>
       <p class="jobline" id="wjob"></p>
+      <div class="row" style="margin-top:10px">
+        <button class="btn ghost" id="wcheck-btn">Check on the grid</button>
+        <button class="btn ghost" id="wtest-btn" title="Sends one short question to your model through the grid and shows which worker answered. It is billed like any request: a fraction of a cent.">Send a test request</button>
+      </div>
+      <p class="hint" id="wcheck"></p>
 
       <details class="adv">
         <summary>Advanced steps &amp; troubleshooting</summary>
@@ -333,6 +404,13 @@
       <div class="stats" id="estats"></div>
       <h2 class="sec">History</h2>
       <div id="earnchart"><p class="muted">—</p></div>
+      <h2 class="sec">Payouts</h2>
+      <div class="stats" id="pstats"></div>
+      <p class="hint" id="pwallet"></p>
+      <div class="tablewrap"><table id="payouts"><thead><tr>
+        <th>hour (UTC)</th><th>den</th><th>AIPG</th><th>status</th><th>transaction</th>
+      </tr></thead><tbody></tbody></table></div>
+      <p class="hint" id="pnet"></p>
       <h2 class="sec">Recent jobs</h2>
       <div class="tablewrap"><table id="jobs"><thead><tr>
         <th>when</th><th>model</th><th>type</th><th>den</th><th>units</th><th>dur</th>

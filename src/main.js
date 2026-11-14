@@ -412,6 +412,7 @@ function jobWhen(j) {
   return isNaN(d) ? String(raw) : d.toLocaleString();
 }
 async function loadEarnings() {
+  loadPayouts().catch(() => {});
   try {
     // The totals are the workers' counters: `total_den` of /account/jobs
     // only sums the jobs it returns (the latest 50).
@@ -446,7 +447,9 @@ function checkTransitions(workers) {
     if (hid.includes(w.name)) continue; // no alerts for hidden (retired) workers
     const p = prev[w.name] || {};
     const on = !!w.online, maint = !!w.maintenance;
-    if (p.online === true && !on) {
+    if (p.online === true && !on && w.name === workerName() && wset().schedule_on && schedPaused()) {
+      // off the grid because the working hours ended: as the user set it
+    } else if (p.online === true && !on) {
       nativeNotify("Worker offline", `${w.name} dropped off the grid.`);
       ntfyPush("Worker offline: " + w.name, `${w.name} dropped off the grid.`, "warning");
     } else if (p.online === false && on) {
@@ -665,7 +668,7 @@ function renderJobs() {
       el.textContent = (n === 1 ? "Serving a grid job: " : `Serving ${n} grid jobs: `) + parts.join("  |  ");
       el.className = "jobline busy";
     } else {
-      el.textContent = "Waiting for grid jobs" +
+      el.textContent = (schedPaused() ? `Outside the working hours (${schedText(wset())}): taking no jobs` : "Waiting for grid jobs") +
         (JOB_SESSION.n ? ` · ${JOB_SESSION.n} served this session · +${JOB_SESSION.den.toFixed(1)} den · last: ${JOB_SESSION.last}` : "");
       el.className = "jobline";
     }
@@ -674,7 +677,10 @@ function renderJobs() {
   if (WORKER_RUNNING) tip = n ? `AIPG Desktop: serving ${n} grid job${n === 1 ? "" : "s"}`
     : `AIPG Desktop: worker waiting for jobs` + (JOB_SESSION.n ? ` (${JOB_SESSION.n} served)` : "");
   if (tip !== TRAY_TIP && TAURI.core) { TRAY_TIP = tip; invoke("tray_status", { text: tip }).catch(() => {}); }
-  if (WORKER_RUNNING && !RESTART_T) wsetStatus(n ? `working · ${n} job${n === 1 ? "" : "s"}` : "running", n ? "run busy" : "run");
+  if (WORKER_RUNNING && !RESTART_T) {
+    const off = !n && schedPaused();
+    wsetStatus(n ? `working · ${n} job${n === 1 ? "" : "s"}` : off ? "outside working hours" : "running", n ? "run busy" : off ? "warn" : "run");
+  }
   if (n && !JOB_TICK) JOB_TICK = setInterval(renderJobs, 1000);
   if (!n && JOB_TICK) { clearInterval(JOB_TICK); JOB_TICK = null; }
 }
@@ -1018,6 +1024,8 @@ async function loadWorker() {
   refreshOllamaModels();
   loadModelsDir();
   loadOllamaSettings();
+  loadWorkerSettings();
+  loadPayoutWallet();
 }
 
 function syncRunButtons() {
@@ -1058,7 +1066,7 @@ function scheduleRestart() {
     RESTART_T = null;
     if (!WANT_RUNNING) { syncRunButtons(); return; }
     try {
-      await invoke("ollama_ensure");
+      if (!ownServer()) await invoke("ollama_ensure");
       await invoke("worker_start", { cfg: LAST_CFG, reason: `restart after an unexpected exit (attempt ${RESTARTS.length}/3)` });
       WORKER_RUNNING = true; syncRunButtons();
     } catch (e) { logLine("[restart] " + emsg(e)); scheduleRestart(); }
@@ -1077,20 +1085,31 @@ async function autoStartWorker() {
   const api_key = gridKey();
   if (!api_key) return needWorkerKey();
   const worker_name = $("#wname2").value.trim();
-  const model = $("#wmodel2").value.trim() || "qwen3:8b";
-  set("aipg_wname", worker_name); set("aipg_wmodel", model);
-  $("#wname").value = worker_name; $("#wmodel").value = model;
+  // at app start this can run before the worker view has read the settings
+  if (!WSET && TAURI.core) { try { WSET = await invoke("worker_settings"); showWorkerSettings(); } catch (e) {} }
+  const own = ownServer();
+  const model = own ? wset().model : ($("#wmodel2").value.trim() || "qwen3:8b");
+  set("aipg_wname", worker_name);
+  if (!own) { set("aipg_wmodel", model); $("#wmodel").value = model; }
+  $("#wname").value = worker_name;
   $("#btn-auto").disabled = true; wsetStatus("starting…", "warn"); resetSteps();
   let step = "ollama";
   try {
     let p = await invoke("prereqs");
     // 1 — Ollama
     step = "ollama"; setStep("ollama", "active");
-    if (!p.ollama_running && !p.ollama_managed && !p.ollama_installed) {
-      wprog(0, "Downloading Ollama (one time)…"); logLine("[auto] setting up Ollama…");
-      await invoke("setup_ollama");
+    if (own) {
+      // the user's own server: it only has to answer and to list the model
+      wprog(null, "Checking your model server…");
+      const listed = await invoke("backend_models", { url: wset().url, key: wset().key });
+      if (!listed.includes(model)) throw `Your model server answers, but does not list “${model}”. Load that model there, or choose another under “Model server”.`;
+    } else {
+      if (!p.ollama_running && !p.ollama_managed && !p.ollama_installed) {
+        wprog(0, "Downloading Ollama (one time)…"); logLine("[auto] setting up Ollama…");
+        await invoke("setup_ollama");
+      }
+      wprog(null, "Starting Ollama…"); await invoke("ollama_ensure");
     }
-    wprog(null, "Starting Ollama…"); await invoke("ollama_ensure");
     setStep("ollama", "done");
     // 2 — worker binary
     step = "worker"; setStep("worker", "active");
@@ -1099,8 +1118,8 @@ async function autoStartWorker() {
     setStep("worker", "done");
     // 3 — model (skip the download when it is already installed)
     step = "model"; setStep("model", "active");
-    const installed = await refreshOllamaModels();
-    const have = installed.some((m) => m.name === model || m.name === model + ":latest");
+    const installed = own ? [] : await refreshOllamaModels();
+    const have = own || installed.some((m) => m.name === model || m.name === model + ":latest");
     if (!have) {
       if (!(await spaceGuard())) throw "Cancelled — not enough disk space. Change the models folder first.";
       PULL_FRAC = 0;
@@ -1165,6 +1184,7 @@ async function saveOllamaSettings() {
 function wireWorker() {
   WORKER_WIRED = true;
   wireModelPicker();
+  wireWorkerSettings();
   $("#ollama-ctx").onchange = saveOllamaSettings;
   $("#ollama-own").onchange = saveOllamaSettings;
   $("#ollama-keep").onchange = saveOllamaSettings;
@@ -1238,13 +1258,14 @@ function wireWorker() {
   $("#btn-start").onclick = async () => {
     const api_key = gridKey();
     if (!api_key) return needWorkerKey();
-    const model = $("#wmodel").value.trim();
+    const own = ownServer();
+    const model = own ? wset().model : $("#wmodel").value.trim();
     const worker_name = $("#wname").value.trim();
-    set("aipg_wname", worker_name); set("aipg_wmodel", model);
+    set("aipg_wname", worker_name); if (!own) set("aipg_wmodel", model);
     $("#btn-start").disabled = true;
     try {
       const cfg = { api_key, model, worker_name };
-      await invoke("ollama_ensure");
+      if (!own) await invoke("ollama_ensure");
       await invoke("worker_start", { cfg, reason: START_REASON || "started by the user" });
       START_REASON = "";
       markStarted(cfg); RESTARTS = []; syncRunButtons();
@@ -1270,6 +1291,241 @@ function wireWorker() {
   $("#btn-auto").onclick = autoStartWorker;
   $("#btn-stop").onclick = stopWorker;
   $("#btn-stop2").onclick = stopWorker;
+}
+
+/* ---------- worker settings: model server, working hours, load ---------- */
+let WSET = null;
+const WDEF = { own: false, url: "", key: "", model: "", concurrency: 1, max_length: 0,
+  schedule_on: false, schedule_days: "all", schedule_start: "22:00", schedule_end: "08:00" };
+function wset() { return WSET || WDEF; }
+function ownServer() { const s = wset(); return !!(s.own && s.url && s.model); }
+// The model the worker offers, whichever server runs it.
+function workerModel() { return ownServer() ? wset().model : ($("#wmodel2").value.trim() || get("aipg_wmodel") || "qwen3:8b"); }
+function workerName() { return (LAST_CFG && LAST_CFG.worker_name) || (get("aipg_wname") || "").trim() || "AIPG-Desktop-Worker"; }
+
+// Same rule as the worker: the day is the one it is right now, and a window
+// whose end lies before its start runs past midnight.
+function schedActive(s, now) {
+  if (!s.schedule_on) return true;
+  const dow = (now.getDay() + 6) % 7; // Monday = 0
+  if (s.schedule_days === "mon-fri" && dow > 4) return false;
+  if (s.schedule_days === "sat-sun" && dow < 5) return false;
+  const hm = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m; };
+  const a = hm(s.schedule_start), b = hm(s.schedule_end), cur = now.getHours() * 60 + now.getMinutes();
+  return a <= b ? (cur >= a && cur < b) : (cur >= a || cur < b);
+}
+function schedPaused() { return !schedActive(wset(), new Date()); }
+function schedText(s) {
+  if (!s.schedule_on) return "";
+  const days = { all: "every day", "mon-fri": "Mon–Fri", "sat-sun": "Sat–Sun" }[s.schedule_days] || "every day";
+  return `${days} ${s.schedule_start}–${s.schedule_end}`;
+}
+
+function showWorkerSettings() {
+  const s = wset();
+  const own = !!s.own;
+  $$('input[name=wsrvmode]').forEach((r) => (r.checked = (r.value === "own") === own));
+  $("#wsrv-own").style.display = own ? "" : "none";
+  $("#wsrv-url").value = s.url || "";
+  $("#wsrv-key").value = s.key || "";
+  if (s.model) fillServerModels([s.model], s.model);
+  $("#wsrv-now").textContent = ownServer() ? `· own server, ${s.model}` : "· Ollama";
+  $("#wlim-on").checked = !!s.schedule_on;
+  $("#wlim-days").value = s.schedule_days || "all";
+  $("#wlim-start").value = s.schedule_start || "22:00";
+  $("#wlim-end").value = s.schedule_end || "08:00";
+  $("#wlim-conc").value = String(s.concurrency || 1);
+  $("#wlim-len").value = String(s.max_length || 0);
+  if (!$("#wlim-len").value) $("#wlim-len").value = "0";
+  const parts = [];
+  if (s.schedule_on) parts.push(schedText(s));
+  if ((s.concurrency || 1) > 1) parts.push(`${s.concurrency} jobs at once`);
+  $("#wlim-now").textContent = parts.length ? "· " + parts.join(" · ") : "· always, one job at a time";
+  // with an own server the model field only shows what is offered
+  const m2 = $("#wmodel2");
+  m2.disabled = ownServer();
+  if (ownServer()) m2.value = s.model; else if (m2.value === s.model && get("aipg_wmodel")) m2.value = get("aipg_wmodel");
+  $("#mpick").style.display = ownServer() ? "none" : "";
+  const st = document.querySelector('#wsteps [data-step="ollama"]');
+  if (st) st.lastChild.textContent = ownServer() ? " Model server" : " Ollama";
+}
+async function loadWorkerSettings() {
+  if (!TAURI.core) return;
+  try { WSET = await invoke("worker_settings"); } catch (e) {}
+  showWorkerSettings();
+}
+function fillServerModels(list, pick) {
+  const sel = $("#wsrv-model");
+  sel.innerHTML = list.length
+    ? list.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")
+    : '<option value="">— the server lists no model —</option>';
+  if (pick && list.includes(pick)) sel.value = pick;
+}
+function srvMsg(text, cls) { const m = $("#wsrv-msg"); m.textContent = text; m.className = "hint" + (cls ? " " + cls : ""); }
+async function listServerModels() {
+  const url = $("#wsrv-url").value.trim();
+  if (!url) { srvMsg("Enter the server address first, or let the app look for servers.", "warn"); return []; }
+  srvMsg("Asking the server for its models…");
+  try {
+    const list = await invoke("backend_models", { url, key: $("#wsrv-key").value });
+    fillServerModels(list, $("#wsrv-model").value || wset().model);
+    srvMsg(list.length ? `${list.length} model${list.length === 1 ? "" : "s"} listed. Choose the one to offer, then test it.` : "The server answers, but lists no model. Load one there first.", list.length ? "" : "warn");
+    return list;
+  } catch (e) { srvMsg(emsg(e), "warn"); return []; }
+}
+async function findServers() {
+  const box = $("#wsrv-found");
+  box.innerHTML = '<p class="hint">Looking at the usual ports…</p>';
+  let found = [];
+  try { found = await invoke("backend_detect"); } catch (e) {}
+  if (!found.length) {
+    box.innerHTML = '<p class="hint">Nothing answered at the usual ports (LM Studio 1234, KoboldCpp 5001, vLLM 8000, SGLang 30000, LMDeploy 23333, llama.cpp 8080, TabbyAPI 5000). Start the server, switch its local API on, or enter the address by hand.</p>';
+    return;
+  }
+  box.innerHTML = found.map((f, i) => `<div class="lmrow"><span class="k">${esc(f.label)}</span>
+    <span class="muted">${f.models.length} model${f.models.length === 1 ? "" : "s"}</span>
+    <button class="btn ghost" data-srv="${i}">Use</button></div>`).join("") +
+    '<p class="hint">The name is what usually runs at that port; the port alone does not prove it.</p>';
+  $$("#wsrv-found [data-srv]").forEach((b) => (b.onclick = () => {
+    const f = found[Number(b.dataset.srv)];
+    $("#wsrv-url").value = f.url;
+    fillServerModels(f.models, wset().model);
+    srvMsg(f.models.length ? "Choose the model to offer, then test it." : "This server lists no model. Load one there first.", f.models.length ? "" : "warn");
+  }));
+}
+async function saveWorkerSettings(part, msgEl) {
+  const s = Object.assign({}, WDEF, wset());
+  if (part === "server") {
+    s.own = document.querySelector('input[name=wsrvmode]:checked').value === "own";
+    s.url = $("#wsrv-url").value.trim();
+    s.key = $("#wsrv-key").value;
+    s.model = $("#wsrv-model").value;
+  } else {
+    s.schedule_on = $("#wlim-on").checked;
+    s.schedule_days = $("#wlim-days").value;
+    s.schedule_start = $("#wlim-start").value || "22:00";
+    s.schedule_end = $("#wlim-end").value || "08:00";
+    s.concurrency = parseInt($("#wlim-conc").value, 10) || 1;
+    s.max_length = parseInt($("#wlim-len").value, 10) || 0;
+  }
+  const say = (t, cls) => { msgEl.textContent = t; msgEl.className = "hint" + (cls ? " " + cls : ""); };
+  try {
+    WSET = await invoke("worker_settings_set", { settings: s });
+    showWorkerSettings(); syncRunButtons();
+    say("Saved. It applies the next time the worker starts.");
+    toast("Saved");
+  } catch (e) { say(emsg(e), "warn"); toast(emsg(e)); }
+}
+function wireWorkerSettings() {
+  $$('input[name=wsrvmode]').forEach((r) => (r.onchange = () => {
+    $("#wsrv-own").style.display = r.value === "own" && r.checked ? "" : "none";
+  }));
+  $("#wsrv-find").onclick = findServers;
+  $("#wsrv-load").onclick = listServerModels;
+  $("#wsrv-test").onclick = async () => {
+    const model = $("#wsrv-model").value;
+    if (!model) { srvMsg("List the models and choose one first.", "warn"); return; }
+    $("#wsrv-test").disabled = true; srvMsg("Sending one short request to your server…");
+    try { srvMsg("✓ " + await invoke("backend_test", { url: $("#wsrv-url").value.trim(), key: $("#wsrv-key").value, model })); }
+    catch (e) { srvMsg(emsg(e), "warn"); }
+    $("#wsrv-test").disabled = false;
+  };
+  $("#wsrv-save").onclick = () => saveWorkerSettings("server", $("#wsrv-msg"));
+  $("#wlim-save").onclick = () => saveWorkerSettings("limits", $("#wlim-msg"));
+  $("#wcheck-btn").onclick = gridCheck;
+  $("#wtest-btn").onclick = gridTestRequest;
+  // the status chip follows the working hours
+  setInterval(() => { if (WORKER_RUNNING && wset().schedule_on) syncRunButtons(); }, 60000);
+}
+
+/* ---------- is this worker really on the grid? ---------- */
+function checkMsg(html, cls) { const m = $("#wcheck"); m.innerHTML = html; m.className = "hint" + (cls ? " " + cls : ""); }
+// Connections of one worker: the plain name, then name#2 … for further jobs at once.
+function mineOf(list, name) { return list.filter((w) => w.name === name || String(w.name).startsWith(name + "#")); }
+async function gridCheck() {
+  const name = workerName();
+  checkMsg("Reading the grid's public worker list…");
+  try {
+    const d = await pubGet("/workers");
+    const mine = mineOf(d.workers || [], name);
+    const on = mine.filter((w) => w.online);
+    if (on.length) {
+      const models = [...new Set(on.flatMap((w) => w.models || []))].join(", ") || "no model named";
+      checkMsg(`✓ The grid lists <b>${esc(name)}</b> as online${on.length > 1 ? ` with ${on.length} connections` : ""}, offering ${esc(models)}. This shows it is registered; “Send a test request” shows that a job gets through.`);
+      return;
+    }
+    let why;
+    if (!WORKER_RUNNING) why = "The worker is not running on this computer.";
+    else if (schedPaused()) why = `It is outside the working hours (${esc(schedText(wset()))}), so it takes no jobs right now.`;
+    else why = "The worker is running here. Registration takes up to a minute after the start; if it stays like this, the log below says why.";
+    checkMsg(`The grid ${mine.length ? "lists" : "does not list"} <b>${esc(name)}</b>${mine.length ? " as offline" : ""}. ${why}`, "warn");
+  } catch (e) { checkMsg("The worker list could not be read: " + esc(emsg(e)), "warn"); }
+}
+async function gridTestRequest() {
+  if (!apiKey()) return needConnection();
+  const name = workerName(), model = "grid/" + workerModel().replace(/^grid\//, "");
+  $("#wtest-btn").disabled = true;
+  checkMsg(`Sending one short question for ${esc(model)} through the grid…`);
+  try {
+    const r = await askOnce("grid", model, [{ role: "user", content: "What is 17 + 25? Reply with the number only." }], 1024);
+    const secs = ((r.t1 - r.t0) / 1000).toFixed(1);
+    const who = r.worker || "";
+    const ours = who === name || who.startsWith(name + "#");
+    if (ours) checkMsg(`✓ The job came through the grid to this worker and was answered in ${secs} s (“${esc(clip(r.text, 30))}”).`);
+    else if (who) checkMsg(`The grid gave the job to another worker, <b>${esc(who)}</b> (${secs} s). The grid chooses among all workers offering ${esc(model)}; this says nothing against yours. Try again, or use “Check on the grid”.`, "warn");
+    else checkMsg(`Answered in ${secs} s, but the grid did not say which worker served it.`, "warn");
+  } catch (e) {
+    const m = emsg(e);
+    checkMsg((/\b(404|400)\b/.test(m) ? `The grid has no worker online for ${esc(model)} right now. ` : "") + "The test request failed: " + esc(m), "warn");
+  }
+  $("#wtest-btn").disabled = false;
+}
+
+/* ---------- payouts: own wallet and payments, and the grid's record ---------- */
+const CONSOLE_URL = "https://console.aipowergrid.io";
+function shortAddr(a) { a = String(a || ""); return a.length > 12 ? a.slice(0, 6) + "…" + a.slice(-4) : a; }
+function aipg(v, digits) { return v == null ? "—" : Number(v).toLocaleString("en-US", { maximumFractionDigits: digits == null ? 4 : digits }); }
+// Shown where the worker is started: without a payout address nothing is paid.
+async function loadPayoutWallet() {
+  const box = $("#wpayout");
+  if (!box) return;
+  if (!apiKey()) { box.style.display = "none"; return; }
+  try {
+    const d = await api("/account/payouts");
+    if (d.payout_wallet) { box.style.display = "none"; return; }
+    box.style.display = "";
+    box.innerHTML = `<b>No payout address yet.</b> A worker earns den for its jobs, and den is paid out in AIPG to a Base address. Your account has none, so nothing can be paid. Add one in the Console under your account settings. <a href="#" data-ext="${CONSOLE_URL}">Open the Console →</a>`;
+  } catch (e) { box.style.display = "none"; }
+}
+async function loadPayouts() {
+  const mine = await api("/account/payouts").catch(() => null);
+  const pub = await pubGet("/payouts/public").catch(() => null);
+  let pool = null, poolN = 0;
+  if (pub && Array.isArray(pub.periods)) {
+    const since = Date.now() - 86400000;
+    const day = pub.periods.filter((p) => Date.parse(p.at) >= since);
+    pool = day.reduce((s, p) => s + (Number(p.aipg) || 0), 0); poolN = day.length;
+  }
+  const last = pub && pub.totals && pub.totals.last_paid;
+  $("#pstats").innerHTML =
+    (mine ? stat("Paid to you", aipg(mine.paid_aipg), "green", "AIPG, all time") +
+            stat("Waiting", aipg(mine.accrued_aipg), "", "AIPG earned, not yet sent") : "") +
+    (pub ? stat("Paid to all workers", pool == null ? "—" : aipg(pool, 2), "blue",
+      `AIPG in the last 24 h, ${poolN} hourly payment${poolN === 1 ? "" : "s"}${last ? " · last " + timeAgo(last) : ""}`) : "");
+  $("#pwallet").innerHTML = !mine ? ""
+    : mine.payout_wallet
+      ? `Payouts go to <code>${esc(shortAddr(mine.payout_wallet))}</code> on Base. The address is changed in the Console.`
+      : `<b>No payout address set</b>, so nothing can be paid out. Add a Base address in the Console under your account settings. <a href="#" data-ext="${CONSOLE_URL}">Open the Console →</a>`;
+  const rows = (mine && mine.payouts) || [];
+  $("#payouts tbody").innerHTML = rows.slice(0, 30).map((p) => {
+    const tx = String(p.tx_hash || ""), hash = tx && !tx.startsWith("0x") ? "0x" + tx : tx;
+    return `<tr><td>${esc(String(p.period_id || "").replace(/^hour-/, "").replace("T", " ") + ":00")}</td>
+      <td>${esc(p.den ?? "—")}</td><td>${esc(aipg(p.aipg, 6))}</td><td>${esc(p.status || "")}</td>
+      <td>${hash ? `<a href="#" data-ext="https://basescan.org/tx/${esc(hash)}">${esc(hash.slice(0, 10))}…</a>` : "—"}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="muted">${mine ? "No payouts yet." : "Sign in or add an API key in Settings to see your payouts."}</td></tr>`;
+  $("#pnet").innerHTML = pub && pub.totals
+    ? `Across the grid so far: ${esc(aipg(pub.totals.aipg_paid, 0))} AIPG in ${esc(aipg(pub.totals.payouts, 0))} payments to ${esc(pub.totals.workers_paid)} addresses. Each hour's amount is shared by the den the workers earned in that hour; there is no fixed rate, and the amounts above are no forecast. <a href="#" data-ext="${CONSOLE_URL}/payouts">Public payout record →</a>`
+    : "";
 }
 
 /* ---------- chat (multi-chat, local persistence, context cap) ---------- */
@@ -2616,6 +2872,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!apiKey() && !SIGNED_IN && get("aipg_onboarded") !== "1") openKeyGuide();
   });
   checkNewModels();
+  loadWorkerSettings();
   bootAutostart();
   wireQuick();
   $("#protect").value = protectMode();

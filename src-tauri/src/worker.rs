@@ -454,6 +454,7 @@ pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Resu
         // keep the model in memory between jobs, so a job after a quiet
         // spell does not start with a slow reload
         .env("OLLAMA_KEEP_ALIVE", keep_alive_env(ollama_keep_alive(&app)))
+        .env("OLLAMA_NUM_PARALLEL", worker_settings_read(&app).concurrency.to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
@@ -828,6 +829,251 @@ fn parse_mem_gb(s: &str) -> f64 {
     }
 }
 
+/* ------------------------- worker settings ------------------------- */
+
+/// How the worker runs: which model server it uses and how much it takes on.
+/// Kept in config.json under "worker" and read at every worker start, so a
+/// restart after a crash or an app update uses the same values.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct WorkerSettings {
+    /// use the user's own OpenAI-compatible server instead of Ollama
+    own: bool,
+    url: String,
+    key: String,
+    model: String,
+    /// jobs served at the same time
+    concurrency: u64,
+    /// answer length used when a request names none; 0 = the worker's default
+    max_length: u64,
+    schedule_on: bool,
+    /// "all", "mon-fri" or "sat-sun"
+    schedule_days: String,
+    schedule_start: String,
+    schedule_end: String,
+}
+
+impl Default for WorkerSettings {
+    fn default() -> Self {
+        Self {
+            own: false,
+            url: String::new(),
+            key: String::new(),
+            model: String::new(),
+            concurrency: 1,
+            max_length: 0,
+            schedule_on: false,
+            schedule_days: "all".into(),
+            schedule_start: "22:00".into(),
+            schedule_end: "08:00".into(),
+        }
+    }
+}
+
+fn hm_ok(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 5
+        && b[2] == b':'
+        && s[..2].parse::<u32>().map(|h| h < 24).unwrap_or(false)
+        && s[3..].parse::<u32>().map(|m| m < 60).unwrap_or(false)
+}
+
+/// `http://host:1234` or `http://host:1234/v1` -> `http://host:1234/v1`.
+fn backend_base(url: &str) -> Result<String, String> {
+    let u = url.trim().trim_end_matches('/');
+    let rest = u
+        .strip_prefix("http://")
+        .or_else(|| u.strip_prefix("https://"))
+        .ok_or("The address must start with http:// or https://")?;
+    let host = rest.split('/').next().unwrap_or("");
+    if host.is_empty() || host.contains('@') || u.chars().any(|c| c.is_whitespace()) {
+        return Err("That is not a usable server address.".into());
+    }
+    Ok(if u.ends_with("/v1") { u.to_string() } else { format!("{u}/v1") })
+}
+
+impl WorkerSettings {
+    fn clean(mut self) -> Self {
+        self.concurrency = self.concurrency.clamp(1, 8);
+        if self.max_length != 0 {
+            self.max_length = self.max_length.clamp(256, 32_768);
+        }
+        if !matches!(self.schedule_days.as_str(), "all" | "mon-fri" | "sat-sun") {
+            self.schedule_days = "all".into();
+        }
+        if !hm_ok(&self.schedule_start) || !hm_ok(&self.schedule_end) || self.schedule_start == self.schedule_end {
+            self.schedule_on = false;
+        }
+        self
+    }
+    /// The own server's base address, when that mode is on and usable.
+    fn own_base(&self) -> Option<String> {
+        if !self.own {
+            return None;
+        }
+        backend_base(&self.url).ok()
+    }
+    /// The worker's schedule: serve inside the window, stay off the grid
+    /// outside it. The first matching window wins, so the catch-all comes last.
+    fn schedule_json(&self) -> Option<String> {
+        if !self.schedule_on {
+            return None;
+        }
+        let mut window = serde_json::json!({
+            "start": self.schedule_start,
+            "end": self.schedule_end,
+            "concurrency": self.concurrency,
+        });
+        if self.schedule_days != "all" {
+            window["days"] = serde_json::json!(self.schedule_days);
+        }
+        Some(serde_json::json!([window, { "concurrency": 0 }]).to_string())
+    }
+}
+
+fn worker_settings_read(app: &AppHandle) -> WorkerSettings {
+    std::fs::read_to_string(config_path(app))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| serde_json::from_value::<WorkerSettings>(v["worker"].clone()).ok())
+        .unwrap_or_default()
+        .clean()
+}
+
+#[tauri::command]
+pub fn worker_settings(app: AppHandle) -> WorkerSettings {
+    worker_settings_read(&app)
+}
+
+/// Save the worker settings. They apply at the next worker start.
+#[tauri::command]
+pub async fn worker_settings_set(
+    app: AppHandle,
+    state: State<'_, Arc<Procs>>,
+    settings: WorkerSettings,
+) -> Result<WorkerSettings, String> {
+    if state.worker.lock().await.is_some() {
+        return Err("Stop the worker before changing these settings.".into());
+    }
+    if settings.own {
+        backend_base(&settings.url)?;
+        if settings.model.trim().is_empty() {
+            return Err("Choose the model your server runs.".into());
+        }
+    }
+    if settings.schedule_on
+        && (!hm_ok(&settings.schedule_start) || !hm_ok(&settings.schedule_end) || settings.schedule_start == settings.schedule_end)
+    {
+        return Err("The time window needs two different times, as HH:MM.".into());
+    }
+    let before = worker_settings_read(&app);
+    let s = settings.clean();
+    if s.concurrency != before.concurrency {
+        // the app's Ollama is started with this number, so let it start anew
+        if let Some(mut c) = state.ollama.lock().await.take() {
+            let _ = c.start_kill();
+            let _ = c.wait().await;
+        }
+    }
+    config_patch(&app, "worker", serde_json::to_value(&s).map_err(e)?)?;
+    Ok(s)
+}
+
+fn backend_http(secs: u64) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(secs))
+        .build()
+        .map_err(e)
+}
+
+async fn backend_model_list(http: &reqwest::Client, base: &str, key: &str) -> Result<Vec<String>, String> {
+    let mut req = http.get(format!("{base}/models"));
+    if !key.trim().is_empty() {
+        req = req.bearer_auth(key.trim());
+    }
+    let r = req.send().await.map_err(|x| format!("No answer from {base}: {x}"))?;
+    if !r.status().is_success() {
+        return Err(format!("{base}/models answered HTTP {}", r.status().as_u16()));
+    }
+    let v: serde_json::Value = r.json().await.map_err(|_| format!("{base}/models did not return a model list"))?;
+    let list = v["data"].as_array().ok_or_else(|| format!("{base}/models did not return a model list"))?;
+    Ok(list.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+}
+
+#[derive(Serialize)]
+pub struct FoundBackend {
+    label: String,
+    url: String,
+    models: Vec<String>,
+}
+
+/// Look for model servers on this computer at the ports they use by default.
+/// The label is what usually listens there; the port alone does not prove it.
+#[tauri::command]
+pub async fn backend_detect() -> Vec<FoundBackend> {
+    const PORTS: &[(u16, &str)] = &[
+        (1234, "LM Studio"),
+        (5001, "KoboldCpp"),
+        (8000, "vLLM"),
+        (30000, "SGLang"),
+        (23333, "LMDeploy"),
+        (8080, "llama.cpp server or LocalAI"),
+        (5000, "TabbyAPI"),
+    ];
+    let Ok(http) = backend_http(2) else { return Vec::new() };
+    let probes = PORTS.iter().map(|(port, label)| {
+        let http = http.clone();
+        async move {
+            let url = format!("http://127.0.0.1:{port}/v1");
+            let models = backend_model_list(&http, &url, "").await.ok()?;
+            Some(FoundBackend { label: format!("{label} (port {port})"), url, models })
+        }
+    });
+    futures_util::future::join_all(probes).await.into_iter().flatten().collect()
+}
+
+/// The models a server offers.
+#[tauri::command]
+pub async fn backend_models(url: String, key: String) -> Result<Vec<String>, String> {
+    let base = backend_base(&url)?;
+    backend_model_list(&backend_http(8)?, &base, &key).await
+}
+
+/// One short request to the server, the way the worker will send them.
+#[tauri::command]
+pub async fn backend_test(url: String, key: String, model: String) -> Result<String, String> {
+    let base = backend_base(&url)?;
+    if model.trim().is_empty() {
+        return Err("Choose a model first.".into());
+    }
+    let http = backend_http(180)?;
+    let mut req = http.post(format!("{base}/chat/completions")).json(&serde_json::json!({
+        "model": model.trim(),
+        "messages": [{ "role": "user", "content": "Reply with the single word: ready" }],
+        "max_tokens": 512,
+        "stream": false,
+    }));
+    if !key.trim().is_empty() {
+        req = req.bearer_auth(key.trim());
+    }
+    let t0 = std::time::Instant::now();
+    let r = req.send().await.map_err(|x| format!("No answer from {base}: {x}"))?;
+    let status = r.status();
+    let v: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
+    if !status.is_success() {
+        let why = v["error"]["message"].as_str().or_else(|| v["error"].as_str()).unwrap_or("");
+        return Err(format!("The server answered HTTP {}{}", status.as_u16(), if why.is_empty() { String::new() } else { format!(": {why}") }));
+    }
+    let msg = &v["choices"][0]["message"];
+    let text = msg["content"].as_str().unwrap_or("").trim().to_string();
+    let secs = t0.elapsed().as_secs_f32();
+    if text.is_empty() {
+        return Err(format!("The server answered after {secs:.1} s, but with no text. The worker needs a chat answer from this model."));
+    }
+    let short: String = text.chars().take(60).collect();
+    Ok(format!("Answered in {secs:.1} s: “{short}”"))
+}
+
 /* ------------------------- worker process ------------------------- */
 
 #[derive(Deserialize)]
@@ -874,21 +1120,38 @@ pub async fn worker_start(
         cfg.worker_name.trim().to_string()
     };
 
+    let ws = worker_settings_read(&app);
+    let own = ws.own_base();
+    let model = match &own {
+        Some(_) if !ws.model.trim().is_empty() => ws.model.trim().to_string(),
+        _ => cfg.model.trim().to_string(),
+    };
+    let backend_url = own.clone().unwrap_or_else(ollama_url);
     let mut cmd = Command::new(&bin);
     // One backend, declared explicitly: this also overrides a GRID_BACKENDS
-    // entry in a .env left by a stand-alone worker install. The advertised
-    // context is capped at the configured context length.
+    // entry in a .env left by a stand-alone worker install.
     let mut backend = serde_json::json!({
-        "type": "ollama",
-        "url": ollama_url(),
-        "model": cfg.model.trim(),
-        "grid_model": format!("grid/{}", cfg.model.trim()),
+        "type": if own.is_some() { "openai" } else { "ollama" },
+        "url": backend_url,
+        "model": model,
+        "grid_model": format!("grid/{model}"),
         "name": name,
-        "concurrency": 1,
+        "concurrency": ws.concurrency,
     });
-    // Also with the user's own Ollama: the worker takes the smaller of this
-    // cap and what the loaded model reports, so it can only lower the claim.
-    backend["max_context"] = serde_json::json!(ollama_ctx(&app));
+    if own.is_some() {
+        // the user's own server: the worker reads the context length from it
+        if !ws.key.trim().is_empty() {
+            backend["api_key"] = serde_json::json!(ws.key.trim());
+        }
+    } else {
+        // The advertised context is capped at the configured context length.
+        // Also with the user's own Ollama: the worker takes the smaller of this
+        // cap and what the loaded model reports, so it can only lower the claim.
+        backend["max_context"] = serde_json::json!(ollama_ctx(&app));
+    }
+    if let Some(s) = ws.schedule_json() {
+        backend["schedule"] = serde_json::json!(s);
+    }
     if let Ok(mut k) = REDACT_KEY.lock() {
         *k = cfg.api_key.trim().to_string();
     }
@@ -898,11 +1161,14 @@ pub async fn worker_start(
         .env("GRID_BACKENDS", serde_json::json!([backend]).to_string())
         .args(["--no-gui", "--no-browser"])
         .arg("--model")
-        .arg(cfg.model.trim())
+        .arg(&model)
         .arg("--backend-url")
-        .arg(ollama_url())
+        .arg(&backend_url)
         .arg("--worker-name")
         .arg(&name);
+    if ws.max_length > 0 {
+        cmd.env("GRID_MAX_LENGTH", ws.max_length.to_string());
+    }
     // Give the worker's local dashboard a free port to avoid "port 7861 in use".
     let dash_port = free_port();
     if let Some(port) = dash_port {
@@ -941,6 +1207,10 @@ pub async fn worker_start(
         let procs = state.inner().clone();
         let app2 = app.clone();
         let piped = piped.clone();
+        let (probe, server) = match &own {
+            Some(base) => (format!("{base}/models"), "your own model server"),
+            None => (format!("{}/api/version", ollama_url()), "Ollama"),
+        };
         tokio::spawn(async move {
             let started = std::time::Instant::now();
             let mut lines = BufReader::new(out).lines();
@@ -962,11 +1232,11 @@ pub async fn worker_start(
                         // The worker does not say why it stops (on Windows it has
                         // no error output at all), so record what can be seen here.
                         let ollama = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(2)).build() {
-                            Ok(h) => h.get(format!("{}/api/version", ollama_url())).send().await.map(|r| r.status().is_success()).unwrap_or(false),
+                            Ok(h) => h.get(&probe).send().await.map(|r| r.status().is_success()).unwrap_or(false),
                             Err(_) => false,
                         };
                         format!(
-                            "worker process ended on its own{status} after {} min. The model server (Ollama) {}. The worker gives no reason; its last lines are above.",
+                            "worker process ended on its own{status} after {} min. The model server ({server}) {}. The worker gives no reason; its last lines are above.",
                             started.elapsed().as_secs() / 60,
                             if ollama { "still answers, so it was not the cause" } else { "does not answer: that is the likely cause" }
                         )
@@ -984,11 +1254,23 @@ pub async fn worker_start(
         pump(app.clone(), err, true, piped.clone());
     }
     let why = reason.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("no reason given");
-    let line = desk_line(&format!("worker started ({}) · model {} · reason: {}", WORKER_TAG, cfg.model.trim(), redact(why)));
+    let mut what = format!("model {model}");
+    if let Some(base) = &own {
+        what.push_str(&format!(" on your own server {base}"));
+    }
+    if ws.concurrency > 1 {
+        what.push_str(&format!(" · {} jobs at once", ws.concurrency));
+    }
+    if ws.schedule_json().is_some() {
+        what.push_str(&format!(" · only {} {}-{} (local time)", ws.schedule_days, ws.schedule_start, ws.schedule_end));
+    }
+    let line = desk_line(&format!("worker started ({}) · {} · reason: {}", WORKER_TAG, what, redact(why)));
     log_append(&app, &line);
     let _ = app.emit("worker-log", line);
     poll_dashboard_log(app.clone(), state.inner().clone(), my_gen, dash_port.unwrap_or(7861), dash_token, piped);
-    preload_model(app.clone(), state.inner().clone(), my_gen, cfg.model.trim().to_string());
+    if own.is_none() {
+        preload_model(app.clone(), state.inner().clone(), my_gen, model);
+    }
     Ok(())
 }
 

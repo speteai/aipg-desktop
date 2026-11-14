@@ -62,6 +62,14 @@ Chat works right away — running a worker is optional and needs an API key.
   - shows live download progress (GB and %), lets you pick **where models are stored**,
     and lists installed models with their size so you can delete what you no longer need,
   - restarts the worker automatically if it crashes.
+  - **your own model server** instead of the app's Ollama: LM Studio, KoboldCpp, vLLM, SGLang, LMDeploy or any other
+    server with an OpenAI-compatible API. The app looks for one on this computer, lists its models and tests it before
+    the worker uses it; nothing is downloaded twice.
+  - **working hours and load**: a daily time window (for example nights only), outside of which the worker takes no
+    jobs; the number of jobs served at once; the answer length used when a request names none.
+  - **check on the grid**: whether the grid lists the worker as online, and a test request that shows which worker
+    answered it.
+  - a notice when the account has **no payout address**, since nothing is paid out without one.
 - **OpenClaw** — Connect shows the one-line command that gives OpenClaw the grid tools through the local connector
   (tested with OpenClaw 2026.11.3: balance, council and a masked chat call).
 - **Council** — a chat switch (and the connector tool `grid_council`) that puts one question to every text model
@@ -78,6 +86,8 @@ Chat works right away — running a worker is optional and needs an API key.
   while the worker runs in the app and stored on this computer only.
 - **Overview / Models / Earnings** — spendable balance with today's free allowance (and what holding AIPG adds to it), workers online (retired workers
   can be hidden), den earned and jobs; live model list with prices; recent jobs plus a **local earnings-history graph**.
+- **Payouts** — under Earnings: AIPG paid to you and still waiting, each payment with its transaction on Base, and what
+  the grid paid to all workers in the last 24 hours.
 - **Network** — a live diagram of the grid: which workers are online, which models they
   serve, who handled the latest jobs. (The grid publishes no worker locations, so it is a
   structure view, not a geographic map.)
