@@ -117,6 +117,11 @@ fn ollama_models_dir(app: &AppHandle) -> PathBuf {
 }
 /// First existing managed ollama executable, if any.
 fn managed_ollama_bin(app: &AppHandle) -> Option<PathBuf> {
+    // set while the archive is being unpacked: a setup that was cut short
+    // leaves it behind, and the next setup starts over
+    if ollama_root(app).join("installing").exists() {
+        return None;
+    }
     let d = ollama_dist(app);
     let names: &[&str] = if cfg!(windows) {
         &["ollama.exe", "bin/ollama.exe"]
@@ -124,6 +129,36 @@ fn managed_ollama_bin(app: &AppHandle) -> Option<PathBuf> {
         &["ollama", "bin/ollama"]
     };
     names.iter().map(|n| d.join(n)).find(|p| p.exists())
+}
+
+/// Stop a child and everything it started. On Windows the worker is a
+/// one-file bundle: a launcher that starts the real process. Killing the
+/// launcher alone would leave that one connected to the grid.
+pub(crate) async fn kill_tree(c: &mut Child) {
+    #[cfg(windows)]
+    {
+        if let Some(pid) = c.id() {
+            let mut k = Command::new("taskkill");
+            k.args(["/PID", &pid.to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null());
+            quiet(&mut k);
+            let _ = k.status().await;
+        }
+    }
+    let _ = c.start_kill();
+}
+
+/// The next line a process wrote. Bytes that are not UTF-8 are replaced: read
+/// strictly, one stray byte would look like the end of the output, and the
+/// process would be taken for dead and killed.
+pub(crate) async fn read_line_lossy<R>(reader: &mut R, buf: &mut Vec<u8>) -> Option<String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    buf.clear();
+    match reader.read_until(b'\n', buf).await {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(String::from_utf8_lossy(buf).trim_end_matches(['\n', '\r']).to_string()),
+    }
 }
 
 /* ------------------------- worker binary ------------------------- */
@@ -397,10 +432,13 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
     let dist = ollama_dist(&app);
     let tmp2 = tmp.clone();
     let _ = app.emit("ollama-dl", serde_json::json!({ "status": "extracting" }));
+    let installing = root.join("installing");
+    std::fs::write(&installing, OLLAMA_TAG).map_err(e)?;
     tokio::task::spawn_blocking(move || extract_archive(&tmp2, &dist, kind))
         .await
         .map_err(e)??;
     let _ = std::fs::remove_file(&tmp);
+    std::fs::remove_file(&installing).map_err(e)?;
 
     let bin = managed_ollama_bin(&app)
         .ok_or("Extracted, but no ollama binary was found.")?;
@@ -432,6 +470,10 @@ pub(crate) fn extract_archive(archive: &PathBuf, dist: &PathBuf, kind: Arch) -> 
 /// Start Ollama if it is not already answering (managed binary preferred).
 #[tauri::command]
 pub async fn ollama_ensure(app: AppHandle, state: State<'_, Arc<Procs>>) -> Result<(), String> {
+    // one at a time: two calls that both find Ollama down would each start
+    // one, and the second start replaces (and so kills) the first
+    static ENSURE: Mutex<()> = Mutex::const_new(());
+    let _one = ENSURE.lock().await;
     if ollama_up().await {
         return Ok(());
     }
@@ -557,11 +599,19 @@ pub async fn ollama_pull(app: AppHandle, model: String) -> Result<(), String> {
         .send()
         .await
         .map_err(e)?;
+    let status = resp.status();
     let mut stream = resp.bytes_stream();
     let mut pending = String::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(e)?;
-        pending.push_str(&String::from_utf8_lossy(&chunk));
+    let mut ended = false;
+    while !ended {
+        match stream.next().await {
+            Some(chunk) => pending.push_str(&String::from_utf8_lossy(&chunk.map_err(e)?)),
+            // the last line may come without a line break (a refusal does)
+            None => {
+                pending.push('\n');
+                ended = true;
+            }
+        }
         while let Some(nl) = pending.find('\n') {
             let line: String = pending.drain(..=nl).collect();
             let line = line.trim();
@@ -575,6 +625,9 @@ pub async fn ollama_pull(app: AppHandle, model: String) -> Result<(), String> {
                 let _ = app.emit("ollama-pull", j);
             }
         }
+    }
+    if !status.is_success() {
+        return Err(format!("Ollama refused to pull “{model}” (HTTP {}). Check the model name.", status.as_u16()));
     }
     let _ = app.emit("ollama-pull", serde_json::json!({ "status": "success" }));
     Ok(())
@@ -922,6 +975,26 @@ impl WorkerSettings {
         if !self.schedule_on {
             return None;
         }
+        let overnight = self.schedule_start > self.schedule_end; // "HH:MM" compares like a time
+        if self.schedule_days != "all" && overnight {
+            // "Mon–Fri 22:00–08:00" means the nights that start Monday to
+            // Friday. The text worker and the media bridge read a window past
+            // midnight differently, so it is handed over as two plain windows
+            // both read alike: the evening on the day itself, the morning on
+            // the day after.
+            let after = match self.schedule_days.as_str() {
+                "mon-fri" => "tue-sat",
+                _ => "sun-mon", // sat-sun
+            };
+            return Some(
+                serde_json::json!([
+                    { "days": self.schedule_days, "start": self.schedule_start, "concurrency": self.concurrency },
+                    { "days": after, "end": self.schedule_end, "concurrency": self.concurrency },
+                    { "concurrency": 0 }
+                ])
+                .to_string(),
+            );
+        }
         let mut window = serde_json::json!({
             "start": self.schedule_start,
             "end": self.schedule_end,
@@ -1120,8 +1193,10 @@ pub async fn worker_start(
     {
         let mut g = state.worker.lock().await;
         if let Some(mut c) = g.take() {
-            let _ = c.start_kill();
-            let _ = c.wait().await;
+            // the old process's watcher must read this as "replaced", not as an exit
+            state.worker_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            kill_tree(&mut c).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), c.wait()).await;
         }
     }
     let bin = worker_bin(&app);
@@ -1230,8 +1305,8 @@ pub async fn worker_start(
         };
         tokio::spawn(async move {
             let started = std::time::Instant::now();
-            let mut lines = BufReader::new(out).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            let (mut rd, mut buf) = (BufReader::new(out), Vec::new());
+            while let Some(line) = read_line_lossy(&mut rd, &mut buf).await {
                 piped.store(true, std::sync::atomic::Ordering::SeqCst);
                 let line = redact(&line);
                 log_append(&app2, &line);
@@ -1261,7 +1336,10 @@ pub async fn worker_start(
                     None => "worker process stopped by the app.".to_string(),
                 };
                 log_append(&app2, &desk_line(&how));
-                let _ = app2.emit("worker-exit", true);
+                // a new start may have come in while this one was being looked at
+                if procs.worker_gen.load(std::sync::atomic::Ordering::SeqCst) == my_gen {
+                    let _ = app2.emit("worker-exit", true);
+                }
             } else {
                 log_append(&app2, &desk_line("previous worker process replaced by a new start."));
             }
@@ -1447,8 +1525,8 @@ where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        let (mut rd, mut buf) = (BufReader::new(reader), Vec::new());
+        while let Some(line) = read_line_lossy(&mut rd, &mut buf).await {
             piped.store(true, std::sync::atomic::Ordering::SeqCst);
             let line = redact(&line);
             log_append(&app, &line);
@@ -1463,7 +1541,7 @@ where
 #[tauri::command]
 pub async fn worker_stop(state: State<'_, Arc<Procs>>) -> Result<(), String> {
     if let Some(mut c) = state.worker.lock().await.take() {
-        let _ = c.start_kill();
+        kill_tree(&mut c).await;
     }
     Ok(())
 }
@@ -1532,11 +1610,26 @@ fn move_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()
         let _ = std::fs::remove_dir(src);
         Ok(())
     } else {
-        if dst.exists() {
+        // Only a destination of the same size counts as "already there": a
+        // shorter one is what an earlier move left behind when it was cut off.
+        let same = match (std::fs::metadata(src), std::fs::metadata(dst)) {
+            (Ok(a), Ok(b)) => a.len() == b.len(),
+            _ => false,
+        };
+        if same {
             return std::fs::remove_file(src);
         }
+        if dst.exists() {
+            std::fs::remove_file(dst)?;
+        }
         if std::fs::rename(src, dst).is_err() {
-            std::fs::copy(src, dst)?;
+            // another drive: copy under a temporary name, so a copy that is
+            // cut off never looks like the finished file
+            let mut part = dst.as_os_str().to_owned();
+            part.push(".part");
+            let part = PathBuf::from(part);
+            std::fs::copy(src, &part)?;
+            std::fs::rename(&part, dst)?;
             std::fs::remove_file(src)?;
         }
         Ok(())
@@ -1578,6 +1671,9 @@ pub async fn models_dir_set(
         stopped = true;
     }
 
+    if move_existing && old != target && target.starts_with(&old) {
+        return Err("The new folder lies inside the current models folder. Choose a folder outside it, or leave “move existing models” off.".into());
+    }
     if move_existing && old != target && old.exists() {
         let (o, t) = (old.clone(), target.clone());
         tokio::task::spawn_blocking(move || move_tree(&o, &t))
@@ -2124,7 +2220,7 @@ pub async fn chats_write(app: AppHandle, data: String) -> Result<(), String> {
 
 pub async fn kill_all(procs: &Procs) {
     if let Some(mut c) = procs.worker.lock().await.take() {
-        let _ = c.start_kill();
+        kill_tree(&mut c).await;
     }
     if let Some(mut c) = procs.ollama.lock().await.take() {
         let _ = c.start_kill();

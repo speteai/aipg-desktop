@@ -209,6 +209,9 @@ pub fn connector_enable(app: AppHandle, api_key: String) -> Result<(), String> {
 fn write_key_file(app: &AppHandle, cfg: &Value) -> Result<(), String> {
     let path = key_file(app);
     std::fs::create_dir_all(crate::worker::data_dir(app)).map_err(e)?;
+    // The connector reads this file on every call. Written in place it is
+    // empty for a moment, and an empty file reads as "no limit, no key".
+    let tmp = path.with_extension("json.tmp");
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -218,12 +221,17 @@ fn write_key_file(app: &AppHandle, cfg: &Value) -> Result<(), String> {
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(&path)
+            .open(&tmp)
             .map_err(e)?;
         f.write_all(cfg.to_string().as_bytes()).map_err(e)?;
     }
     #[cfg(not(unix))]
-    std::fs::write(&path, cfg.to_string()).map_err(e)?;
+    std::fs::write(&tmp, cfg.to_string()).map_err(e)?;
+    if std::fs::rename(&tmp, &path).is_err() {
+        // Windows refuses the rename while another program holds the file open
+        std::fs::write(&path, cfg.to_string()).map_err(e)?;
+        let _ = std::fs::remove_file(&tmp);
+    }
     Ok(())
 }
 

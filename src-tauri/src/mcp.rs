@@ -106,8 +106,11 @@ impl Ctx {
     }
     /// Replace a reservation by what the request really cost (0 when it was
     /// never billed). `billed` counts it as a paid request.
-    fn settle(&self, reserved: f64, actual: f64, billed: bool) {
+    /// `day` is the UTC day the reservation was made on: after midnight the
+    /// reservation sits in yesterday's ledger and must not come off today's.
+    fn settle(&self, reserved: f64, day: u64, actual: f64, billed: bool) {
         let dir = self.data_dir();
+        let reserved = if day == utc_day() { reserved } else { 0.0 };
         with_spend_lock(&dir, || {
             let (spent, requests) = spend_today(&dir);
             write_spend(&dir, (spent - reserved + actual.max(0.0)).max(0.0), requests + billed as u64);
@@ -418,7 +421,7 @@ async fn served_by(ctx: &Ctx, model: &str, out_tokens: Option<u64>, t0: f64, t1:
             .and_then(|w| w["workers"].as_array().cloned())
             .map(|a| a.iter().any(|x| x["name"].as_str() == Some(worker)))
             .unwrap_or(false);
-        let mut s = format!(" · probably served by worker {worker}{}", if own { " (the user's own worker)" } else { "" });
+        let mut s = format!(" · probably served by worker {}{}", label(worker), if own { " (the user's own worker)" } else { "" });
         let id: String = job["job_id"].as_str().unwrap_or("").chars().take(8).collect();
         if !id.is_empty() {
             s.push_str(&format!(", job {id}"));
@@ -771,9 +774,24 @@ async fn post_chat(ctx: &Ctx, body: &Value, secs: u64) -> Result<Value, String> 
     let mut events = 0u32;
     let mut buf: Vec<u8> = Vec::new();
     let mut stream = r.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("The connection to the grid broke off while the answer was coming in (timeout or network): {e}"))?;
-        buf.extend_from_slice(&chunk);
+    // kept only until the first event: a backend that ignores `stream` answers with one plain JSON body
+    let mut plain: Vec<u8> = Vec::new();
+    let mut ended = false;
+    while !ended {
+        match stream.next().await {
+            Some(chunk) => {
+                let chunk = chunk.map_err(|e| format!("The connection to the grid broke off while the answer was coming in (timeout or network): {e}"))?;
+                if events == 0 && plain.len() < 4_000_000 {
+                    plain.extend_from_slice(&chunk);
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            // the last line may come without a line break
+            None => {
+                buf.push(b'\n');
+                ended = true;
+            }
+        }
         while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
             let raw: Vec<u8> = buf.drain(..=pos).collect();
             let line = String::from_utf8_lossy(&raw);
@@ -783,8 +801,8 @@ async fn post_chat(ctx: &Ctx, body: &Value, secs: u64) -> Result<Value, String> 
                 continue;
             }
             let Ok(j) = serde_json::from_str::<Value>(data) else { continue };
-            if let Some(err) = j.get("error") {
-                let msg = err["message"].as_str().map(str::to_string).unwrap_or_else(|| err.to_string());
+            if let Some(err) = j.get("error").filter(|e| !e.is_null()) {
+                let msg: String = err["message"].as_str().map(str::to_string).unwrap_or_else(|| err.to_string()).chars().take(300).collect();
                 // keep the wording the callers look for
                 let code = if err["type"] == "invalid_request_error" { "HTTP 400" } else { "upstream error" };
                 return Err(format!("Grid request failed ({code}): {msg}."));
@@ -813,6 +831,15 @@ async fn post_chat(ctx: &Ctx, body: &Value, secs: u64) -> Result<Value, String> 
         }
     }
     if events == 0 {
+        if let Ok(j) = serde_json::from_slice::<Value>(&plain) {
+            if j["choices"][0]["message"].is_object() {
+                return Ok(j);
+            }
+            if let Some(err) = j.get("error").filter(|e| !e.is_null()) {
+                let msg: String = err["message"].as_str().map(str::to_string).unwrap_or_else(|| err.to_string()).chars().take(300).collect();
+                return Err(format!("Grid request failed (upstream error): {msg}."));
+            }
+        }
         return Err("The grid closed the connection without an answer.".into());
     }
     if finish.is_null() {
@@ -834,17 +861,30 @@ fn answer_budget(asked: Option<u64>) -> u64 {
 /// What the account can spend right now, for comparing before and after a
 /// request that failed.
 async fn spendable(ctx: &Ctx) -> Option<f64> {
-    get_json(ctx, "/account/credits", true).await.ok()?["total_spendable_usd"].as_f64()
+    let v = get_json(ctx, "/account/credits", true).await.ok()?;
+    let x = &v["total_spendable_usd"];
+    x.as_f64().or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))
 }
 
 /// A request failed. The grid may have billed it all the same (a job that
 /// timed out on the worker, for instance), so compare the balance with what
 /// it was before, book the difference and say so.
-async fn settle_failed(ctx: &Ctx, reserved: f64, before: Option<f64>, flight: &Flight, err: String) -> String {
+async fn settle_failed(ctx: &Ctx, reserved: f64, day: u64, before: Option<f64>, flight: &Flight, err: String) -> String {
+    let _ = flight; // kept in the signature: the request stays "in flight" until it is settled
     let after = spendable(ctx).await;
+    // a failure of the kind the grid bills all the same (the job ran, the answer never arrived)
+    let low = err.to_lowercase();
+    let may_be_billed = ["timeout", "timed out", "(http 502)", "(http 503)", "(http 504)", "(http 524)", "broke off", "closed the connection", "upstream error"]
+        .iter()
+        .any(|k| low.contains(k));
     let mut charged = match (before, after) {
-        // with other requests running, the difference is not this request's
-        (Some(b), Some(a)) if b - a > 0.000_000_5 && flight.alone() => b - a,
+        // With other requests running, the difference is not this request's
+        // alone. It is booked up to this request's worst case all the same:
+        // a limit that counts too much is safer than one that counts nothing.
+        (Some(b), Some(a)) if b - a > 0.000_000_5 => b - a,
+        (Some(_), Some(_)) => 0.0,
+        // the balance could not be read: keep the reservation where a charge is likely
+        _ if may_be_billed => reserved,
         _ => 0.0,
     };
     // other spending of the account may run at the same time: never book more
@@ -852,7 +892,7 @@ async fn settle_failed(ctx: &Ctx, reserved: f64, before: Option<f64>, flight: &F
     if reserved > 0.0 {
         charged = charged.min(reserved);
     }
-    ctx.settle(reserved, charged, charged > 0.0);
+    ctx.settle(reserved, day, charged, charged > 0.0);
     let mut out = err;
     let low = out.to_lowercase();
     if low.contains("timeout") || low.contains("timed out") || low.contains("(http 504)") || low.contains("(http 502)") || low.contains("(http 503)") || low.contains("(http 524)") || low.contains("broke off") {
@@ -952,6 +992,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     }
     let before = if model == "auto" { worst_text_rates(&models) } else { text_rates(&models, &model) };
     let reserved = ctx.reserve(before.map(|r| text_cost(r, input_est, max_tokens)))?;
+    let day = utc_day();
     let flight = Flight::begin();
     let credit_before = spendable(ctx).await;
     let (sent_at, clock) = (epoch_now(), std::time::Instant::now());
@@ -993,7 +1034,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     };
     let d = match d {
         Ok(d) => d,
-        Err(err) => return Err(settle_failed(ctx, reserved, credit_before, &flight, err).await),
+        Err(err) => return Err(settle_failed(ctx, reserved, day, credit_before, &flight, err).await),
     };
 
     let took = clock.elapsed().as_secs_f64();
@@ -1005,7 +1046,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     let usage = &d["usage"];
     let tokens = (usage["prompt_tokens"].as_u64(), usage["completion_tokens"].as_u64());
     let rates = text_rates(&models, &used).or(before);
-    let mut note = format!("AI Power Grid · model {used}");
+    let mut note = format!("AI Power Grid · model {}", label(&used));
     let mut cost = None;
     if let (Some(i), Some(o)) = tokens {
         note.push_str(&format!(" · {i} input + {o} output tokens"));
@@ -1038,7 +1079,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     }
     let cost = charged.or(cost);
     // unknown price: keep the reservation rather than booking nothing
-    ctx.settle(reserved, cost.unwrap_or(reserved), true);
+    ctx.settle(reserved, day, cost.unwrap_or(reserved), true);
     note.push_str(reasoning_note);
     if let Some(a) = asked_tokens.filter(|a| *a < MIN_ANSWER_TOKENS) {
         note.push_str(&format!(" · max_tokens raised from {a} to {MIN_ANSWER_TOKENS} so that a model that thinks first still has room to answer"));
@@ -1052,6 +1093,11 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
             ));
         }
     }
+    match choice["finish_reason"].as_str() {
+        Some("length") => note.push_str(" · WARNING: the answer stops at the max_tokens limit and is incomplete; ask again with a higher max_tokens if the rest matters"),
+        Some(f) if f.starts_with("cut off") => note.push_str(" · WARNING: the connection ended before the model finished, so the answer may be incomplete"),
+        _ => {}
+    }
     note.push_str(&format!(" · answered in {took:.1} s"));
     // The grid names the worker and its timing next to the answer (`grid`).
     // Only when that is missing is the public job feed searched instead.
@@ -1064,7 +1110,7 @@ async fn grid_chat(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
                 .and_then(|w| w["workers"].as_array().cloned())
                 .map(|a| a.iter().any(|x| x["name"].as_str() == Some(worker)))
                 .unwrap_or(false);
-            note.push_str(&format!(" · served by worker {worker}{}", if own { " (the user's own worker)" } else { "" }));
+            note.push_str(&format!(" · served by worker {}{}", label(worker), if own { " (the user's own worker)" } else { "" }));
             if let Some(t) = meta["gen_time"].as_f64() {
                 note.push_str(&format!(", {t:.1} s on the worker"));
             }
@@ -1213,6 +1259,7 @@ async fn grid_council(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         members + text_cost(r, chair_in, CHAIR_TOKENS)
     });
     let reserved = ctx.reserve(worst)?;
+    let day = utc_day();
     let flight = Flight::begin();
     let credit_before = spendable(ctx).await;
     let clock = std::time::Instant::now();
@@ -1255,8 +1302,8 @@ async fn grid_council(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
                 add_cost(&d, &name);
                 let text = d["choices"][0]["message"]["content"].as_str().map(str::trim).unwrap_or("").to_string();
                 members.push(Member {
-                    model: d["model"].as_str().unwrap_or(&name).to_string(),
-                    worker: d["grid"]["worker"].as_str().unwrap_or("").to_string(),
+                    model: label(d["model"].as_str().unwrap_or(&name)),
+                    worker: d["grid"]["worker"].as_str().map(str::trim).filter(|w| !w.is_empty()).map(label).unwrap_or_default(),
                     error: if text.is_empty() { "no visible answer (the model only reasoned)".into() } else { String::new() },
                     text,
                     secs,
@@ -1268,7 +1315,7 @@ async fn grid_council(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
     let valid: Vec<&Member> = members.iter().filter(|m| !m.text.is_empty()).collect();
     if valid.is_empty() {
         let why = members.iter().map(|m| format!("{}: {}", m.model, m.error)).collect::<Vec<_>>().join("; ");
-        return Err(settle_failed(ctx, reserved, credit_before, &flight, format!("None of the council's models returned an answer ({why}).")).await);
+        return Err(settle_failed(ctx, reserved, day, credit_before, &flight, format!("None of the council's models returned an answer ({why}).")).await);
     }
 
     // the chair: the one asked for, else the largest by name, else the quickest
@@ -1341,7 +1388,7 @@ async fn grid_council(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         (None, true) => format!("cost at most {} in total (list price for the reported tokens; the grid usually charges less)", money(list_cost)),
         (None, false) => "cost not known (no list price for one of the models)".to_string(),
     };
-    ctx.settle(reserved, charged.unwrap_or(if priced { list_cost } else { reserved }), true);
+    ctx.settle(reserved, day, charged.unwrap_or(if priced { list_cost } else { reserved }), true);
 
     let headline = match verdict.as_str() {
         "agree" => format!("The {} models agree.", valid.len()),
@@ -1383,6 +1430,19 @@ async fn grid_council(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
 
 /// An answer must not be able to close its own frame: the two marker lines
 /// are removed from it wherever they appear, in any letter case.
+/// A model or worker name as it may appear outside the untrusted frame.
+/// Worker names are chosen by whoever runs the worker, so only plain name
+/// characters are kept and the length is capped: a name cannot carry a
+/// sentence or close the bracket of the note.
+fn label(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "._:#/@+-".contains(*c))
+        .take(64)
+        .collect();
+    if s.is_empty() { "(unnamed)".into() } else { s }
+}
+
 fn defuse_markers(answer: &str) -> String {
     let mut out = answer.to_string();
     for marker in ["<<<end of grid output>>>", "<<<grid output>>>"] {
@@ -1674,42 +1734,48 @@ async fn grid_generate_image(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, Stri
     };
     let per_image = book_rates(&price_book(ctx).await, &model).and_then(|r| r["per_image_usd"].as_f64());
     let reserved = ctx.reserve(per_image.map(|p| p * n as f64))?;
+    let day = utc_day();
     let flight = Flight::begin();
     let credit_before = spendable(ctx).await;
     let body = json!({ "model": model, "prompt": prompt, "n": n, "size": size });
     let d = match post_json(ctx, "/images/generations", &body, 900).await {
         Ok(d) => d,
         Err(err) => {
-            return Err(settle_failed(ctx, reserved, credit_before, &flight, err).await);
+            return Err(settle_failed(ctx, reserved, day, credit_before, &flight, err).await);
         }
     };
     let items = d["data"].as_array().cloned().unwrap_or_default();
     // The grid has billed at this point: book it now, so an image that later
     // fails to download or save is still counted.
     let made = items.len().max(1) as f64;
-    ctx.settle(reserved, per_image.unwrap_or(0.0) * made, true);
+    ctx.settle(reserved, day, per_image.unwrap_or(0.0) * made, true);
     let dir = ctx.images_dir();
     let files = ctx.image_files_dir();
     let mut content = Vec::new();
     let mut lines = Vec::new();
     let mut inlined = 0usize;
-    for it in &items {
-        let bytes: Vec<u8> = if let Some(s) = it["b64_json"].as_str() {
-            b64.decode(s.trim()).map_err(|e| format!("Bad image data from the grid: {e}"))?
+    for (index, it) in items.iter().enumerate() {
+        let fetched: Result<Vec<u8>, String> = if let Some(s) = it["b64_json"].as_str() {
+            b64.decode(s.trim()).map_err(|e| format!("bad image data from the grid: {e}"))
         } else if let Some(url) = it["url"].as_str().filter(|u| u.starts_with("https://")) {
-            let r = ctx
-                .http
-                .get(url)
-                .timeout(Duration::from_secs(120))
-                .send()
-                .await
-                .map_err(|e| format!("Could not download the image: {e}"))?;
-            if !r.status().is_success() {
-                return Err(format!("Could not download the image: HTTP {}", r.status()));
+            match ctx.http.get(url).timeout(Duration::from_secs(120)).send().await {
+                Err(e) => Err(format!("download failed: {e}")),
+                Ok(r) if !r.status().is_success() => Err(format!("download failed: HTTP {}", r.status())),
+                Ok(r) => r.bytes().await.map(|b| b.to_vec()).map_err(|e| format!("download failed: {e}")),
             }
-            r.bytes().await.map_err(|e| e.to_string())?.to_vec()
         } else {
             continue;
+        };
+        let bytes = match fetched {
+            Ok(b) => b,
+            Err(err) => {
+                // it was billed with the others: say so instead of failing the whole call
+                lines.push(format!("Image {} of {} could not be fetched ({err}). It was billed all the same; do not repeat the whole request for it.", index + 1, items.len()));
+                if let Some(url) = it["url"].as_str() {
+                    lines.push(format!("URL: {url}"));
+                }
+                continue;
+            }
         };
         if bytes.is_empty() {
             continue;

@@ -119,8 +119,11 @@ function fmtBytes(n) {
 }
 
 async function loadOverview() {
+  // signed in, but the token could not be renewed (grid out of reach at start): try again
+  if (!apiKey() && SIGNED_IN && Date.now() - AUTH_AT > 15000) await refreshAuth();
   const hasKey = !!apiKey();
-  $("#needkey").style.display = hasKey ? "none" : "";
+  $("#needkey").style.display = hasKey || SIGNED_IN ? "none" : "";
+  if (!hasKey && SIGNED_IN) { setConn("err", "sign-in not renewed"); $("#stamp").textContent = "The grid could not be reached to renew your sign-in. Press Refresh to try again."; return; }
   if (!hasKey) { setConn("", "not connected"); $("#stats").innerHTML = ""; $("#workers").innerHTML = '<p class="muted">—</p>'; renderHolder(null); return; }
   setConn("", "loading…");
   try {
@@ -140,7 +143,7 @@ async function loadOverview() {
     checkTransitions(w.workers || []);
     renderHolder(c.free);
   } catch (e) {
-    if (e.message === "no-key") return;
+    if (e.message === "no-key") { setConn("err", SIGNED_IN ? "sign-in not renewed" : "not connected"); return; }
     setConn("err", e.status === 401 ? (gridKey() ? "bad API key" : "sign-in rejected") : "error");
     toast(e.message);
   }
@@ -377,6 +380,8 @@ async function loadModels() {
 function loadEarnHist() { try { return JSON.parse(get("aipg_earnhist") || "[]"); } catch (e) { return []; } }
 function recordEarn(totalDen) {
   if (totalDen == null) return loadEarnHist();
+  totalDen = Math.round(Number(totalDen) * 100) / 100;
+  if (!isFinite(totalDen)) return loadEarnHist();
   let h = loadEarnHist();
   const day = new Date().toISOString().slice(0, 10);
   if (h.length && h[h.length - 1].d === day) h[h.length - 1].v = totalDen; // keep latest for today
@@ -397,7 +402,8 @@ function renderEarnHistory(h) {
   const x = (i) => pad + i * (W - 2 * pad) / (n - 1);
   const y = (v) => H - pad - (v - min) / span * (H - 2 * pad);
   const d = h.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
-  const last = h[n - 1].v, delta = h[n - 1].v - h[n - 2].v;
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const last = r2(h[n - 1].v), delta = r2(h[n - 1].v - h[n - 2].v);
   box.innerHTML =
     `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Den earned over time">` +
     `<path d="${d}" fill="none" stroke="var(--acc)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` +
@@ -440,6 +446,16 @@ async function loadEarnings() {
 /* ---------- monitoring transitions ---------- */
 function loadWState() { try { return JSON.parse(get(LS.wstate) || "{}"); } catch (e) { return {}; } }
 function saveWState(s) { set(LS.wstate, JSON.stringify(s)); }
+// The worker this app runs, with its extra connections (name#2, …).
+function isOwnWorker(name) { const n = workerName(); return name === n || String(name).startsWith(n + "#"); }
+// Forget what was last seen of the own worker: after a stop by the user or a
+// new app start, its going offline or coming back is no news.
+function forgetOwnWorkerState() {
+  const s = loadWState();
+  let changed = false;
+  for (const k of Object.keys(s)) if (isOwnWorker(k)) { delete s[k]; changed = true; }
+  if (changed) saveWState(s);
+}
 function checkTransitions(workers) {
   if (get(LS.alerts) !== "1") { saveWState(workerMap(workers)); return; }
   const prev = loadWState(), hid = hiddenWorkers();
@@ -447,7 +463,7 @@ function checkTransitions(workers) {
     if (hid.includes(w.name)) continue; // no alerts for hidden (retired) workers
     const p = prev[w.name] || {};
     const on = !!w.online, maint = !!w.maintenance;
-    if (p.online === true && !on && w.name === workerName() && wset().schedule_on && schedPaused()) {
+    if (p.online === true && !on && isOwnWorker(w.name) && wset().schedule_on && schedPaused()) {
       // off the grid because the working hours ended: as the user set it
     } else if (p.online === true && !on) {
       nativeNotify("Worker offline", `${w.name} dropped off the grid.`);
@@ -470,7 +486,7 @@ function workerMap(workers) {
 function startPolling() {
   if (POLL) clearInterval(POLL);
   POLL = null;
-  if (!apiKey()) return;
+  if (!apiKey() && !SIGNED_IN) return;
   const tick = async () => {
     if (get(LS.alerts) === "1") {
       try { const w = await api("/account/workers"); checkTransitions(w.workers || []); } catch (e) {}
@@ -1012,6 +1028,8 @@ async function loadWorker() {
     $("#wunsupported").textContent = "This section only works in the installed desktop app.";
     return;
   }
+  // first of all: the listeners for log lines and progress, so nothing of a start at launch is missed
+  if (!WORKER_WIRED) wireWorker();
   try { renderHardware(await invoke("hardware")); } catch (e) {}
   $("#wname").value = get("aipg_wname") || "";
   $("#wmodel").value = get("aipg_wmodel") || "qwen3:8b";
@@ -1033,16 +1051,19 @@ function syncRunButtons() {
   const dl = $("#worker-dl-state").textContent.indexOf("not downloaded") < 0 &&
     $("#worker-dl-state").textContent.indexOf("downloaded") >= 0;
   $("#btn-stop").disabled = !WORKER_RUNNING && !RESTART_T;
-  $("#btn-start").disabled = WORKER_RUNNING || !dl;
+  $("#btn-start").disabled = WORKER_RUNNING || STARTING || !dl;
   $("#btn-stop2").disabled = !WORKER_RUNNING && !RESTART_T;
-  $("#btn-auto").disabled = WORKER_RUNNING;
-  if (!RESTART_T) wsetStatus(WORKER_RUNNING ? "running" : "idle", WORKER_RUNNING ? "run" : "");
+  $("#btn-auto").disabled = WORKER_RUNNING || STARTING;
+  if (STARTING && !WORKER_RUNNING) wsetStatus("starting…", "warn");
+  else if (!RESTART_T) wsetStatus(WORKER_RUNNING ? "running" : "idle", WORKER_RUNNING ? "run" : "");
   renderJobs();
 }
 
 /* crash recovery: restart an unexpectedly exited worker, at most 3× per 10 min */
 let WANT_RUNNING = false, LAST_CFG = null, RESTARTS = [], RESTART_T = null;
-function markStarted(cfg) { WORKER_RUNNING = true; WANT_RUNNING = true; LAST_CFG = cfg; jobsReset(true); }
+// STARTING: the guided start is under way. USER_STOP: the exit that follows was asked for.
+let STARTING = false, USER_STOP = false;
+function markStarted(cfg) { WORKER_RUNNING = true; WANT_RUNNING = true; USER_STOP = false; LAST_CFG = cfg; jobsReset(true); }
 // A line for the worker log on screen and in the log file.
 function deskNote(msg) {
   logLine("[desktop] " + msg);
@@ -1068,7 +1089,14 @@ function scheduleRestart() {
     if (!WANT_RUNNING) { syncRunButtons(); return; }
     try {
       if (!ownServer()) await invoke("ollama_ensure");
+      if (!WANT_RUNNING) { syncRunButtons(); return; }
       await invoke("worker_start", { cfg: LAST_CFG, reason: `restart after an unexpected exit (attempt ${RESTARTS.length}/3)` });
+      if (!WANT_RUNNING) {
+        // Stop was pressed while the worker was coming up
+        USER_STOP = true;
+        try { await invoke("worker_stop"); } catch (e) {}
+        WORKER_RUNNING = false; syncRunButtons(); return;
+      }
       WORKER_RUNNING = true; syncRunButtons();
     } catch (e) { logLine("[restart] " + emsg(e)); scheduleRestart(); }
   }, delay);
@@ -1077,6 +1105,7 @@ function scheduleRestart() {
 
 async function stopWorker() {
   WANT_RUNNING = false; clearTimeout(RESTART_T); RESTART_T = null;
+  USER_STOP = true; forgetOwnWorkerState();
   $("#btn-stop").disabled = $("#btn-stop2").disabled = true;
   try { await invoke("worker_stop"); } catch (e) {}
   WORKER_RUNNING = false; jobsReset(false); syncRunButtons();
@@ -1085,6 +1114,9 @@ async function stopWorker() {
 async function autoStartWorker() {
   const api_key = gridKey();
   if (!api_key) return needWorkerKey();
+  if (STARTING || WORKER_RUNNING) return;
+  STARTING = true;
+  clearTimeout(RESTART_T); RESTART_T = null; // a pending crash restart would start a second time
   const worker_name = $("#wname2").value.trim();
   // at app start this can run before the worker view has read the settings
   if (!WSET && TAURI.core) { try { WSET = await invoke("worker_settings"); showWorkerSettings(); } catch (e) {} }
@@ -1139,6 +1171,7 @@ async function autoStartWorker() {
   } catch (e) {
     setStep(step, "error"); wprog(null, "⚠ " + emsg(e)); logLine("[auto] error: " + emsg(e)); toast(emsg(e));
   } finally {
+    STARTING = false;
     try { renderPrereqs(await invoke("prereqs")); } catch (e) {}
     syncRunButtons();
   }
@@ -1224,7 +1257,8 @@ function wireWorker() {
     logLine("[desktop] worker exited.");
     if (WANT_RUNNING && LAST_CFG) { scheduleRestart(); return; }
     syncRunButtons();
-    nativeNotify("Worker stopped", "The worker process exited.");
+    if (!USER_STOP) nativeNotify("Worker stopped", "The worker process exited.");
+    USER_STOP = false;
   });
 
   $("#btn-setup-ollama").onclick = async () => {
@@ -1265,6 +1299,7 @@ function wireWorker() {
     const worker_name = $("#wname").value.trim();
     set("aipg_wname", worker_name); if (!own) set("aipg_wmodel", model);
     $("#btn-start").disabled = true;
+    clearTimeout(RESTART_T); RESTART_T = null; // a pending crash restart would start a second time
     try {
       const cfg = { api_key, model, worker_name };
       if (!own) await invoke("ollama_ensure");
@@ -1305,16 +1340,17 @@ function ownServer() { const s = wset(); return !!(s.own && s.url && s.model); }
 function workerModel() { return ownServer() ? wset().model : ($("#wmodel2").value.trim() || get("aipg_wmodel") || "qwen3:8b"); }
 function workerName() { return (LAST_CFG && LAST_CFG.worker_name) || (get("aipg_wname") || "").trim() || "AIPG-Desktop-Worker"; }
 
-// Same rule as the worker: the day is the one it is right now, and a window
-// whose end lies before its start runs past midnight.
+// Same rule as the windows handed to the workers: a window whose end lies
+// before its start runs past midnight and belongs to the day it starts on.
 function schedActive(s, now) {
   if (!s.schedule_on) return true;
   const dow = (now.getDay() + 6) % 7; // Monday = 0
-  if (s.schedule_days === "mon-fri" && dow > 4) return false;
-  if (s.schedule_days === "sat-sun" && dow < 5) return false;
+  const on = (d) => s.schedule_days === "mon-fri" ? d <= 4 : s.schedule_days === "sat-sun" ? d >= 5 : true;
   const hm = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m; };
   const a = hm(s.schedule_start), b = hm(s.schedule_end), cur = now.getHours() * 60 + now.getMinutes();
-  return a <= b ? (cur >= a && cur < b) : (cur >= a || cur < b);
+  if (a <= b) return on(dow) && cur >= a && cur < b;
+  // past midnight: the evening counts on its own day, the morning belongs to the day before
+  return (on(dow) && cur >= a) || (on((dow + 6) % 7) && cur < b);
 }
 function schedPaused() { return !schedActive(wset(), new Date()); }
 function schedText(s) {
@@ -1646,6 +1682,9 @@ async function loadPayouts() {
 
 /* ---------- chat (multi-chat, local persistence, context cap) ---------- */
 let CHAT_WIRED = false, CHAT_ABORT = null, CHAT_PERSIST_T = null, STORE = null;
+// CHAT_LIVE: the reply that is being written right now ({ id: chat, el: its bubble }).
+// STORE_BROKEN: the chat file could not be read; nothing is written, so it is not replaced by an empty one.
+let CHAT_BUSY = false, CHAT_LIVE = null, CHAT_MODELS_SEQ = 0, STORE_BROKEN = false;
 let OLLAMA_LOCAL = "http://127.0.0.1:11511/v1"; // the app's own Ollama; updated by loadOllamaSettings()
 
 function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -1654,8 +1693,15 @@ function curChat() { return STORE && STORE.chats.find((c) => c.id === STORE.curr
 
 async function storeLoad() {
   let raw = "{}";
-  try { raw = await invoke("chats_read"); } catch (e) {}
-  let s; try { s = JSON.parse(raw); } catch (e) { s = {}; }
+  STORE_BROKEN = false;
+  try { raw = await invoke("chats_read"); }
+  catch (e) { STORE_BROKEN = true; toast("Your saved chats could not be read (" + emsg(e) + "). Chats of this session are not saved, so the file stays as it is. Restart the app to try again."); }
+  let s;
+  try { s = JSON.parse(raw); }
+  catch (e) {
+    s = {};
+    if (String(raw).trim()) { STORE_BROKEN = true; toast("The file with your saved chats is damaged and was left untouched. Chats of this session are not saved."); }
+  }
   STORE = {
     v: 1,
     chats: Array.isArray(s.chats) ? s.chats : [],
@@ -1669,6 +1715,7 @@ async function storeLoad() {
   if (!STORE.current || !curChat()) STORE.current = STORE.chats[0].id;
 }
 function storePersist() {
+  if (STORE_BROKEN) return;
   clearTimeout(CHAT_PERSIST_T);
   CHAT_PERSIST_T = setTimeout(() => { invoke("chats_write", { data: JSON.stringify(STORE) }).catch(() => {}); }, 400);
 }
@@ -1703,6 +1750,8 @@ function renderChatList() {
 
 async function fillChatModels() {
   const src = chatSource(), sel = $("#chatmodel");
+  // a slow answer for the source chosen before must not overwrite the list of the one chosen now
+  const seq = ++CHAT_MODELS_SEQ;
   if (src === "grid") {
     let ids = ["auto"]; const price = {}, speed = {};
     try { const d = await api("/models", false); ids = (d.data || []).map((m) => m.id); } catch (e) {}
@@ -1715,6 +1764,7 @@ async function fillChatModels() {
       });
     } catch (e) {}
     // most suitable concrete model = fastest text model with known throughput
+    if (seq !== CHAT_MODELS_SEQ) return;
     const best = Object.keys(speed).sort((a, b) => speed[b] - speed[a])[0];
     ids.sort((a, b) => (a === "auto" ? -1 : b === "auto" ? 1 : 0));
     sel.innerHTML = ids.map((id) => {
@@ -1726,11 +1776,15 @@ async function fillChatModels() {
     }).join("");
     $("#chathint").innerHTML = "Grid · <b>Auto</b> picks the best model automatically. ★ = fastest right now. Prices are per million tokens.";
   } else {
-    let list = [];
-    try { list = await invoke("ollama_models"); } catch (e) {}
+    let list = [], why = "";
+    // the app's Ollama only runs once something started it
+    if (TAURI.core) { try { await invoke("ollama_ensure"); } catch (e) { why = emsg(e); } }
+    try { list = await invoke("ollama_models"); } catch (e) { why = why || emsg(e); }
+    if (seq !== CHAT_MODELS_SEQ) return;
     sel.innerHTML = list.length
       ? list.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")
-      : '<option value="">(no local models — pull one under “Run a worker”)</option>';
+      : `<option value="">${why ? "(Ollama is not running — see “Run a worker”)" : "(no local models — pull one under “Run a worker”)"}</option>`;
+    if (!list.length && why) sel.title = why; else sel.title = "";
     $("#chathint").textContent = "Local · runs on your own Ollama, fully offline and free.";
   }
 }
@@ -1763,6 +1817,8 @@ function renderMessages() {
     const body = addMsg(m.role === "user" ? "user" : "bot", m.show != null ? m.show : m.content, m.role !== "user" ? m.model : null, m);
     addCheck(body.parentElement, c, m);
   }
+  // the reply being written is not in the stored messages yet: keep its bubble on screen
+  if (CHAT_LIVE && CHAT_LIVE.id === c.id) { $("#chatlog").appendChild(CHAT_LIVE.el); $("#chatlog").scrollTop = 1e9; }
 }
 
 function loadCurrentChat() {
@@ -2211,6 +2267,11 @@ async function attachFiles(files) {
 }
 
 async function chatSend() {
+  if (CHAT_BUSY) return; // Enter while an answer is still coming in
+  CHAT_BUSY = true;
+  try { await chatSendRun(); } finally { CHAT_BUSY = false; CHAT_LIVE = null; }
+}
+async function chatSendRun() {
   const ta = $("#chattext"), typed = ta.value.trim();
   if (!typed && !CHAT_ATT.length) return;
   const c = curChat(); if (!c) return;
@@ -2244,6 +2305,7 @@ async function chatSend() {
   if (!c.title || c.title === "New chat") { c.title = (typed || att[0].name).slice(0, 40); renderChatList(); }
   const label = src === "grid" ? model : "local · " + model;
   const body = addMsg("bot", "▍", label);
+  CHAT_LIVE = { id: c.id, el: body.parentElement };
   storePersist();
 
   $("#chatsend").style.display = "none"; $("#chatstop").style.display = "";
@@ -2417,7 +2479,13 @@ function imgBusy(on) {
   if (!on) { clearInterval(IMG_TICK); IMG_TICK = null; $("#imgbar").style.display = "none"; }
 }
 
+let IMG_RUNNING = false;
 async function imgGenerate() {
+  if (IMG_RUNNING) return; // Ctrl+Enter while a picture is being made
+  IMG_RUNNING = true;
+  try { await imgGenerateRun(); } finally { IMG_RUNNING = false; }
+}
+async function imgGenerateRun() {
   await authFresh();
   const key = apiKey(); if (!key) return needConnection();
   const model = $("#imgmodel").value; if (!model) { toast("No image model available"); return; }
@@ -2447,6 +2515,7 @@ async function imgGenerate() {
     if (pct != null) bar("#imgbar", pct / 100);
   };
   paint();
+  clearInterval(IMG_TICK);
   IMG_TICK = setInterval(async () => {
     try {
       const r = await fetch(API + "/progress/" + token, { headers: { "Accept": "application/json" } });
@@ -2523,6 +2592,7 @@ async function pickImagesDir() {
   await switchImagesDir(dir);
 }
 
+let GALLERY_SHOWN = 60;
 async function renderGallery() {
   const box = $("#imgresult");
   if (!TAURI.core) return;
@@ -2531,7 +2601,15 @@ async function renderGallery() {
   $("#imgcountlabel").textContent = list.length ? `${list.length} image${list.length === 1 ? "" : "s"} · stored locally` : "";
   if (!list.length) { box.innerHTML = '<p class="muted">Nothing here yet — your generated images are kept on this machine.</p>'; return; }
   box.innerHTML = "";
-  for (const it of list.slice(0, 60)) {
+  if (GALLERY_SHOWN < 60) GALLERY_SHOWN = 60;
+  if (list.length > GALLERY_SHOWN) {
+    const more = document.createElement("button");
+    more.className = "btn"; more.style.order = "9999"; more.style.alignSelf = "center";
+    more.textContent = `Show more (${list.length - GALLERY_SHOWN} older)`;
+    more.onclick = () => { GALLERY_SHOWN += 60; renderGallery(); };
+    setTimeout(() => box.appendChild(more), 0);
+  }
+  for (const it of list.slice(0, GALLERY_SHOWN)) {
     const card = document.createElement("div"); card.className = "gcard";
     const img = document.createElement("img"); img.alt = it.prompt || ""; img.loading = "lazy";
     const cap = document.createElement("p"); cap.className = "gcap"; cap.textContent = it.prompt || ""; cap.title = it.prompt || "";
@@ -2765,10 +2843,12 @@ async function ctProbeAnthropic(key) {
     return [...m[1].matchAll(/'([^']+)'|"([^"]+)"/g)].map((x) => x[1] || x[2]);
   } catch (e) { return null; }
 }
+let CT_PROBED_KEY = null;
 async function loadCodingTools(force) {
   const key = gridKey();
   $("#ct-nokey").style.display = key ? "none" : "";
-  if (force || !CT_TEXT.length) {
+  if (force || !CT_TEXT.length || CT_PROBED_KEY !== key) {
+    CT_PROBED_KEY = key;
     try {
       const r = await fetch(API + "/status/models", { headers: { "Accept": "application/json" } });
       const d = await r.json();
@@ -3172,9 +3252,12 @@ async function installUpdate() {
   try { await invoke("update_install"); }
   catch (e) {
     set("aipg_resume_worker", "0");
-    WANT_RUNNING = WORKER_RUNNING;
-    $("#updmsg").textContent = "Update failed: " + emsg(e);
+    let still = false;
+    try { still = await invoke("worker_running"); } catch (e2) {}
+    WORKER_RUNNING = still; WANT_RUNNING = still;
+    $("#updmsg").textContent = "Update failed: " + emsg(e) + (resume && !still ? " The worker is being started again." : "");
     $("#btn-update-install").disabled = false; $("#btn-update").disabled = false;
+    if (resume && !still) { START_REASON = "restarted after a failed update"; show("worker"); autoStartWorker(); }
   }
 }
 
@@ -3184,6 +3267,7 @@ async function cfgSet(obj) { try { await invoke("config_set", { data: JSON.strin
 async function cfgPatch(key, val) { const c = await cfgGet(); c[key] = val; await cfgSet(c); }
 
 async function bootAutostart() {
+  forgetOwnWorkerState();
   // the worker was running when an update was installed: bring it back once
   const resume = get("aipg_resume_worker") === "1";
   if (resume) set("aipg_resume_worker", "0");

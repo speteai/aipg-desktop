@@ -17,7 +17,7 @@
     ["secret", /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, 0],
     ["secret", /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, 0],
     ["secret", /\b0x[0-9a-fA-F]{64}\b/g, 0],
-    ["secret", /\b(?:pass(?:word|wort)?|pwd|kennwort|secret|api[_-]?key|token)\b\s*[:=]\s*["']?([^\s"',;]{4,})/gi, 1],
+    ["secret", /(?:\b|_)(?:pass(?:word|wort)?|pwd|kennwort|secret|api[_-]?key|token)(?:[_-][A-Za-z0-9]+){0,3}["']?\s*[:=]\s*["']?([^\s"',;]{4,})/gi, 1],
     ["iban", /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b/g, 0],
     ["card", /\b\d(?:[ -]?\d){12,18}\b/g, 0],
     ["email", /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, 0],

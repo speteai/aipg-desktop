@@ -301,6 +301,7 @@ pub async fn comfy_check(url: String, api_key: String) -> Result<ComfyReport, St
     let pricing: serde_json::Value = http.get(format!("{GRID}/pricing")).send().await.map_err(e)?.json().await.map_err(e)?;
     let online: serde_json::Value = http.get(format!("{GRID}/status/models")).send().await.map_err(e)?.json().await.unwrap_or(serde_json::Value::Null);
     let mut models = Vec::new();
+    let mut recipe_failures: Vec<String> = Vec::new();
     for m in pricing["price_book"]["models"].as_array().cloned().unwrap_or_default() {
         let Some(key) = m["model"].as_str() else { continue };
         let rates = &m["rates"];
@@ -308,9 +309,9 @@ pub async fn comfy_check(url: String, api_key: String) -> Result<ComfyReport, St
             ("image", p, "per image")
         } else if let Some(p) = rates["per_video_second_usd"].as_f64() {
             ("video", p, "per second of video")
-        } else if let Some(p) = rates["per_3d_generation_usd"].as_f64() {
-            ("3d", p, "per 3D model")
         } else {
+            // 3D models are left out: the bridge serves them only as a worker
+            // set up for 3D alone, which this app does not do
             continue;
         };
         let live = online.as_array().and_then(|a| a.iter().find(|x| x["name"].as_str().map(|n| n.eq_ignore_ascii_case(key)).unwrap_or(false)));
@@ -319,7 +320,21 @@ pub async fn comfy_check(url: String, api_key: String) -> Result<ComfyReport, St
         let r = http.get(format!("{GRID}/models/{}/recipe", urlencode(&name))).header("apikey", api_key.trim()).send().await;
         let recipes = match r {
             Ok(r) if r.status().is_success() => r.json::<serde_json::Value>().await.ok().and_then(|v| v["recipes"].as_array().cloned()).unwrap_or_default(),
-            _ => Vec::new(),
+            Ok(r) if r.status().as_u16() == 401 || r.status().as_u16() == 403 => {
+                return Err(format!(
+                    "The grid did not accept the API key when asked what its models need (HTTP {}). Check the key under Settings.",
+                    r.status().as_u16()
+                ));
+            }
+            Ok(r) if r.status().as_u16() == 404 => Vec::new(), // no recipe: not a ComfyUI model
+            Ok(r) => {
+                recipe_failures.push(format!("HTTP {}", r.status().as_u16()));
+                Vec::new()
+            }
+            Err(x) => {
+                recipe_failures.push(x.to_string());
+                Vec::new()
+            }
         };
         if recipes.is_empty() {
             continue; // nothing a ComfyUI worker could serve
@@ -349,6 +364,12 @@ pub async fn comfy_check(url: String, api_key: String) -> Result<ComfyReport, St
             missing_nodes,
             missing_files,
         });
+    }
+    if models.is_empty() && !recipe_failures.is_empty() {
+        return Err(format!(
+            "The grid did not say what its models need ({}). Try again in a minute.",
+            recipe_failures[0]
+        ));
     }
     let dev = &stats["devices"][0];
     Ok(ComfyReport {
@@ -435,8 +456,8 @@ pub async fn media_start(app: AppHandle, state: State<'_, Arc<Procs>>, cfg: Medi
     if let Some(out) = stdout {
         let app2 = app.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(out).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            let (mut rd, mut buf) = (BufReader::new(out), Vec::new());
+            while let Some(line) = worker::read_line_lossy(&mut rd, &mut buf).await {
                 emit_log(&app2, &line);
             }
         });
@@ -446,8 +467,8 @@ pub async fn media_start(app: AppHandle, state: State<'_, Arc<Procs>>, cfg: Medi
         let app2 = app.clone();
         let procs = state.inner().clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(err).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            let (mut rd, mut buf) = (BufReader::new(err), Vec::new());
+            while let Some(line) = worker::read_line_lossy(&mut rd, &mut buf).await {
                 emit_log(&app2, &line);
             }
             if procs.media_gen.load(std::sync::atomic::Ordering::SeqCst) == my_gen {

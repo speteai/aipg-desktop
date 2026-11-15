@@ -69,7 +69,7 @@ fn rules() -> &'static Vec<Rule> {
             r(Kind::Secret, r"\b0x[0-9a-fA-F]{64}\b", 0),
             r(
                 Kind::Secret,
-                r#"(?i)\b(?:pass(?:word|wort)?|pwd|kennwort|secret|api[_-]?key|token)\b\s*[:=]\s*["']?([^\s"',;]{4,})"#,
+                r#"(?i)(?:\b|_)(?:pass(?:word|wort)?|pwd|kennwort|secret|api[_-]?key|token)(?:[_-][A-Za-z0-9]+){0,3}["']?\s*[:=]\s*["']?([^\s"',;]{4,})"#,
                 1,
             ),
             r(Kind::Iban, r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b", 0),
