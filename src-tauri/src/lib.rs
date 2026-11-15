@@ -12,6 +12,7 @@ mod job;
 mod media;
 mod mcp;
 mod privacy;
+mod web;
 mod worker;
 use worker::Procs;
 
@@ -135,6 +136,8 @@ pub fn run() {
             media::comfy_check,
             media::media_start,
             media::media_stop,
+            web::web_search,
+            web::web_page,
             worker::models_dir_get,
             worker::ollama_settings,
             worker::ollama_settings_set,

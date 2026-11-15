@@ -98,6 +98,7 @@
             <label class="seg" title="Summarize older messages instead of dropping them"><input type="checkbox" id="chatsum"> Summarize</label>
             <label class="seg" title="Check every grid reply: a second model answers the same question and the two answers are compared. Costs two extra requests per reply. You can also check single replies with the link below them."><input type="checkbox" id="chatcheck"> Cross-check</label>
             <label class="seg" title="Council: every text model that is online answers the question on its own, then one of them writes a joint answer and says where the others agree or differ. One request per model plus one for the joint answer. Agreement is not proof: models can share the same mistake."><input type="checkbox" id="chatcouncil"> Council</label>
+            <label class="seg" title="Search the web for each question and give the results to the model: recent news and Wikipedia, plus a general web search if you stored a search key in Settings. A web address in your message is read as well. The search runs on this computer; the search words go to the search services."><input type="checkbox" id="chatweb"> Web</label>
             <label class="seg" title="This chat never leaves this computer: it can only use a local model"><input type="checkbox" id="chatlocal"> Local only</label>
           </div>
           <p class="hint" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
@@ -658,6 +659,18 @@
         <pre id="donate-addr" class="log cnpre">0x1C0356d4ff32aEe3DF28Acf941335A1823dB50A4</pre>
         <div class="row"><button class="btn" id="donate-copy">Copy address</button></div>
         <p class="hint">Send on Base only. Check the address after pasting: it starts with 0x1C03 and ends with 50A4.</p>
+      </div>
+      <div class="field">
+        <label>Web search key (optional)</label>
+        <div class="row">
+          <input id="webkey" type="password" placeholder="tvly-… (Tavily) or a Brave Search key" autocomplete="off" spellcheck="false">
+          <button class="btn" id="savewebkey">Save</button>
+        </div>
+        <p class="hint">The “Web” switch in the chat works without a key: it finds recent news and Wikipedia articles and reads web addresses you
+          paste. With your own key it also searches the whole web.
+          <a href="#" data-ext="https://tavily.com">Tavily</a> has a free monthly allowance;
+          <a href="#" data-ext="https://brave.com/search/api/">Brave Search</a> works too. The key stays on this computer and is sent only to that
+          service.</p>
       </div>
       <div class="field">
         <label>ntfy topic (optional — push to your phone too)</label>

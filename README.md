@@ -78,6 +78,13 @@ Chat works right away — running a worker is optional and needs an API key.
   Sound and music workers are not open on the grid yet.
 - **OpenClaw** — Connect shows the one-line command that gives OpenClaw the grid tools through the local connector
   (tested with OpenClaw 2026.11.3: balance, council and a masked chat call).
+- **Web** — a chat switch that searches the web for each question and hands the results to the model, which cites
+  them as [1], [2]; the sources are listed under the reply. Without any key it finds recent news (Google News feed)
+  and Wikipedia articles and reads web addresses pasted into the message. With your own Tavily or Brave Search key
+  (Settings) it also searches the whole web. The search runs on your computer, not on a grid worker; the worker only
+  sees the results. Search words go to the search services in plain text, so the app asks first when they contain
+  private data, and “Local only” chats cannot search. Web pages are untrusted text and are framed as such. The
+  connector offers the same as the tools `web_search` and `web_read`; addresses in private networks are refused.
 - **Council** — a chat switch (and the connector tool `grid_council`) that puts one question to every text model
   online. Each answers on its own, one writes a joint answer and states whether the others agree, agree in part or
   contradict each other; the single answers can be opened. Agreement is not proof: models can share a mistake.
