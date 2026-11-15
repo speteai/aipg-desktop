@@ -136,7 +136,7 @@ async function loadOverview() {
         const hid = hiddenWorkers(), vis = (w.workers || []).filter((x) => !hid.includes(x.name));
         return w.workers ? `${vis.filter((x) => x.online).length} / ${vis.length}` : `${w.online || 0} / ${w.count || 0}`;
       })(), "blue")}
-      ${stat("Den earned", (w.den_earned ?? 0), "")}
+      ${stat("Den earned", fmtDen(w.den_earned ?? 0), "")}
       ${stat("Jobs completed", (w.jobs_completed ?? 0), "")}`;
     renderWorkers(w.workers || []);
     $("#stamp").textContent = "Updated " + new Date().toLocaleTimeString();
@@ -148,6 +148,8 @@ async function loadOverview() {
     toast(e.message);
   }
 }
+// Den amounts come as sums of fractions (550.3000000000001): show two decimals at most.
+function fmtDen(v) { const n = Number(v); return v == null || v === "" || !isFinite(n) ? "—" : String(Math.round(n * 100) / 100); }
 function stat(k, v, cls, note) {
   return `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div>${note ? `<div class="n">${note}</div>` : ""}</div>`;
 }
@@ -331,7 +333,7 @@ function renderWorkers(workers) {
     const models = (w.models || []).join(", ") || "—";
     return `<div class="card${isHidden ? " dim" : ""}" data-w="${esc(w.name)}"><h3>${esc(w.name)}</h3>
       <div class="chips">${badge}<span class="chip">${esc(w.type || "")}</span>${isHidden ? '<span class="chip">hidden</span>' : ""}</div>
-      <div class="wmeta">models: ${esc(models)}<br>den: ${esc(w.den_earned ?? 0)} · jobs: ${esc(w.jobs_completed ?? 0)}</div>
+      <div class="wmeta">models: ${esc(models)}<br>den: ${esc(fmtDen(w.den_earned ?? 0))} · jobs: ${esc(w.jobs_completed ?? 0)}</div>
       <div class="row"><button class="btn ghost" data-wi="${i}">${isHidden ? "Unhide" : "Hide"}</button></div></div>`;
   }).join("");
   $$("#workers [data-wi]").forEach((b) => (b.onclick = () => {
@@ -433,7 +435,7 @@ async function loadEarnings() {
     tb.innerHTML = jobs.slice(0, 50).map((j) => `<tr>
       <td>${esc(jobWhen(j))}</td>
       <td>${esc(j.model || "")}</td><td>${esc(j.type || "")}</td>
-      <td>${esc(j.den ?? "—")}</td><td>${esc(j.output_units ?? "—")}</td>
+      <td>${esc(fmtDen(j.den))}</td><td>${esc(j.output_units ?? "—")}</td>
       <td>${esc(j.duration_s != null ? j.duration_s + "s" : "—")}</td></tr>`).join("")
       || '<tr><td colspan="6" class="muted">No jobs yet.</td></tr>';
   } catch (e) {
@@ -728,8 +730,10 @@ function renderPrereqs(p) {
   $("#ollama-state").innerHTML = p.ollama_running
     ? '<span class="chip run">running</span>'
     : (p.ollama_managed || p.ollama_installed) ? '<span class="chip warn">ready, stopped</span>' : '<span class="chip off">not set up</span>';
-  $("#btn-setup-ollama").disabled = p.ollama_managed || p.ollama_running;
-  $("#btn-setup-ollama").textContent = p.ollama_managed ? "Ollama ready" : "Set up Ollama";
+  $("#btn-setup-ollama").disabled = (p.ollama_managed || p.ollama_running) && !p.ollama_outdated;
+  $("#btn-setup-ollama").textContent = p.ollama_outdated ? `Update Ollama to ${p.ollama_tag}` : p.ollama_managed ? "Ollama ready" : "Set up Ollama";
+  $("#btn-setup-ollama").title = p.ollama_outdated
+    ? "The app's own Ollama is an older release than the one this app version is tested with. Updating downloads it again (about 1.5 GB); your models stay." : "";
   $("#btn-ollama").disabled = p.ollama_running || !(p.ollama_managed || p.ollama_installed);
 
   $("#worker-dl-state").innerHTML = p.worker_downloaded
@@ -1262,6 +1266,7 @@ function wireWorker() {
   });
 
   $("#btn-setup-ollama").onclick = async () => {
+    if (WORKER_RUNNING) { toast("Stop the worker first"); return; }
     $("#btn-setup-ollama").disabled = true; setStep("ollama", "active"); wprog(0, "Preparing Ollama…");
     try { await invoke("setup_ollama"); setStep("ollama", "done"); wprog(null, "Ollama set up ✓"); toast("Ollama ready"); }
     catch (e) { setStep("ollama", "error"); wprog(null, "⚠ " + emsg(e)); toast(emsg(e)); }
@@ -1672,7 +1677,7 @@ async function loadPayouts() {
   $("#payouts tbody").innerHTML = rows.slice(0, 30).map((p) => {
     const tx = String(p.tx_hash || ""), hash = tx && !tx.startsWith("0x") ? "0x" + tx : tx;
     return `<tr><td>${esc(String(p.period_id || "").replace(/^hour-/, "").replace("T", " ") + ":00")}</td>
-      <td>${esc(p.den ?? "—")}</td><td>${esc(aipg(p.aipg, 6))}</td><td>${esc(p.status || "")}</td>
+      <td>${esc(fmtDen(p.den))}</td><td>${esc(aipg(p.aipg, 6))}</td><td>${esc(p.status || "")}</td>
       <td>${hash ? `<a href="#" data-ext="https://basescan.org/tx/${esc(hash)}">${esc(hash.slice(0, 10))}…</a>` : "—"}</td></tr>`;
   }).join("") || `<tr><td colspan="5" class="muted">${mine ? "No payouts yet." : "Sign in or add an API key in Settings to see your payouts."}</td></tr>`;
   $("#pnet").innerHTML = pub && pub.totals

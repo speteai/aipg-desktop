@@ -206,6 +206,44 @@ pub struct Prereqs {
     ollama_running: bool,
     ollama_installed: bool,
     ollama_managed: bool,
+    /// the Ollama release this app version pins
+    ollama_tag: String,
+    /// the app's own Ollama is an older release than the pinned one
+    ollama_outdated: bool,
+}
+
+/// The release of the app's own Ollama, as noted when it was set up.
+fn ollama_version_file(app: &AppHandle) -> PathBuf {
+    ollama_root(app).join("version")
+}
+
+/// Whether the app's own Ollama is known to be another release than the
+/// pinned one. Installs from before this note existed are asked once while
+/// they run; as long as the release is unknown, nothing is claimed.
+async fn ollama_outdated(app: &AppHandle, managed: bool, running: bool) -> bool {
+    if !managed {
+        return false;
+    }
+    let file = ollama_version_file(app);
+    let mut have = std::fs::read_to_string(&file).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if have.is_none() && running && !use_system_ollama() {
+        let v = reqwest::Client::new()
+            .get(format!("{}/api/version", ollama_url()))
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+            .ok();
+        if let Some(r) = v {
+            if let Ok(j) = r.json::<serde_json::Value>().await {
+                if let Some(ver) = j["version"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    let tag = format!("v{}", ver.trim_start_matches('v'));
+                    let _ = std::fs::write(&file, &tag);
+                    have = Some(tag);
+                }
+            }
+        }
+    }
+    matches!(have, Some(v) if v != OLLAMA_TAG)
 }
 
 #[tauri::command]
@@ -221,6 +259,8 @@ pub async fn prereqs(app: AppHandle) -> Prereqs {
         ollama_running: running,
         ollama_installed: running || managed || system_ollama().await,
         ollama_managed: managed,
+        ollama_tag: OLLAMA_TAG.into(),
+        ollama_outdated: ollama_outdated(&app, managed, running).await,
     }
 }
 
@@ -374,9 +414,19 @@ fn ollama_asset() -> Option<(&'static str, Arch)> {
 /// Download the official Ollama for this platform (verified), unpack it into the
 /// app's data dir, and make it runnable — no system install, no admin rights.
 #[tauri::command]
-pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
+pub async fn setup_ollama(app: AppHandle, state: State<'_, Arc<Procs>>) -> Result<String, String> {
     if managed_ollama_bin(&app).is_some() {
-        return Ok("already".into());
+        if !ollama_outdated(&app, true, ollama_up().await).await {
+            return Ok("already".into());
+        }
+        // an older release: replace it. Its files are in use while it runs.
+        if state.worker.lock().await.is_some() {
+            return Err("Stop the worker before updating Ollama.".into());
+        }
+        if let Some(mut c) = state.ollama.lock().await.take() {
+            let _ = c.start_kill();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), c.wait()).await;
+        }
     }
     let (asset, kind) = ollama_asset().ok_or("Ollama is not available for this OS/architecture.")?;
     let base = format!("https://github.com/ollama/ollama/releases/download/{OLLAMA_TAG}");
@@ -439,6 +489,7 @@ pub async fn setup_ollama(app: AppHandle) -> Result<String, String> {
         .map_err(e)??;
     let _ = std::fs::remove_file(&tmp);
     std::fs::remove_file(&installing).map_err(e)?;
+    let _ = std::fs::write(ollama_version_file(&app), OLLAMA_TAG);
 
     let bin = managed_ollama_bin(&app)
         .ok_or("Extracted, but no ollama binary was found.")?;

@@ -91,7 +91,8 @@ impl Ctx {
         };
         let dir = self.data_dir();
         with_spend_lock(&dir, || {
-            let (spent, requests) = spend_today(&dir);
+            let (settled, requests, mut open) = read_ledger(&dir);
+            let spent = settled + open_sum(&open);
             if let Some(limit) = limit {
                 if spent + worst > limit {
                     return Err(format!(
@@ -100,7 +101,10 @@ impl Ctx {
                     ));
                 }
             }
-            write_spend(&dir, spent + worst, requests);
+            if worst > 0.0 {
+                open.push(json!({ "pid": std::process::id(), "usd": worst, "ts": epoch_secs() }));
+            }
+            write_ledger(&dir, settled, requests, &open);
             Ok(worst)
         })
     }
@@ -110,10 +114,17 @@ impl Ctx {
     /// reservation sits in yesterday's ledger and must not come off today's.
     fn settle(&self, reserved: f64, day: u64, actual: f64, billed: bool) {
         let dir = self.data_dir();
-        let reserved = if day == utc_day() { reserved } else { 0.0 };
         with_spend_lock(&dir, || {
-            let (spent, requests) = spend_today(&dir);
-            write_spend(&dir, (spent - reserved + actual.max(0.0)).max(0.0), requests + billed as u64);
+            // after midnight the ledger read here is the new day's and holds
+            // no reservation of this request: only the cost is added
+            let (settled, requests, mut open) = read_ledger(&dir);
+            if day == utc_day() && reserved > 0.0 {
+                let me = std::process::id() as u64;
+                if let Some(i) = open.iter().position(|o| o["pid"].as_u64() == Some(me) && (o["usd"].as_f64().unwrap_or(-1.0) - reserved).abs() < 1e-9) {
+                    open.remove(i);
+                }
+            }
+            write_ledger(&dir, settled + actual.max(0.0), requests + billed as u64, &open);
         });
     }
     fn data_dir(&self) -> PathBuf {
@@ -146,22 +157,53 @@ fn utc_day() -> u64 {
         .unwrap_or(0)
 }
 
-/// What the connector spent today (UTC), estimated from list prices, and how
-/// many paid requests it made. Kept in the app data folder.
-pub fn spend_today(data_dir: &Path) -> (f64, u64) {
-    std::fs::read_to_string(data_dir.join(SPEND_FILE))
+/// A reservation older than this belongs to a request that can no longer be
+/// running (the longest request times out after 15 minutes): its connector
+/// was ended before it could settle. It stops counting.
+const RESERVATION_SECS: u64 = 20 * 60;
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Today's ledger: what finished requests cost, how many were paid, and the
+/// reservations of requests that are still running.
+fn read_ledger(data_dir: &Path) -> (f64, u64, Vec<Value>) {
+    let Some(v) = std::fs::read_to_string(data_dir.join(SPEND_FILE))
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .filter(|v| v["day"].as_u64() == Some(utc_day()))
-        .map(|v| (v["usd"].as_f64().unwrap_or(0.0), v["requests"].as_u64().unwrap_or(0)))
-        .unwrap_or((0.0, 0))
+    else {
+        return (0.0, 0, Vec::new());
+    };
+    let now = epoch_secs();
+    let open: Vec<Value> = v["open"]
+        .as_array()
+        .map(|a| a.iter().filter(|o| now.saturating_sub(o["ts"].as_u64().unwrap_or(0)) < RESERVATION_SECS).cloned().collect())
+        .unwrap_or_default();
+    (v["usd"].as_f64().unwrap_or(0.0), v["requests"].as_u64().unwrap_or(0), open)
 }
 
-fn write_spend(dir: &Path, usd: f64, requests: u64) {
-    let v = json!({ "day": utc_day(), "usd": usd, "requests": requests });
+fn open_sum(open: &[Value]) -> f64 {
+    open.iter().map(|o| o["usd"].as_f64().unwrap_or(0.0)).sum()
+}
+
+/// What the connector spent today (UTC), estimated from list prices and
+/// including what running requests may still cost, and how many paid requests
+/// it made. Kept in the app data folder.
+pub fn spend_today(data_dir: &Path) -> (f64, u64) {
+    let (settled, requests, open) = read_ledger(data_dir);
+    (settled + open_sum(&open), requests)
+}
+
+fn write_ledger(dir: &Path, usd: f64, requests: u64, open: &[Value]) {
+    let v = json!({ "day": utc_day(), "usd": usd.max(0.0), "requests": requests, "open": open });
     let tmp = dir.join(format!("{SPEND_FILE}.{}.tmp", std::process::id()));
     if std::fs::write(&tmp, v.to_string()).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(SPEND_FILE));
+        let _ = crate::auth::replace_file(&tmp, &dir.join(SPEND_FILE));
     }
 }
 
@@ -185,7 +227,7 @@ fn with_spend_lock<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
                     .map(|d| d.as_secs() >= 10)
                     .unwrap_or(false);
                 if stale {
-                    let _ = std::fs::remove_file(&lock);
+                    crate::auth::remove_stale(&lock);
                 } else {
                     std::thread::sleep(Duration::from_millis(50));
                 }
@@ -488,8 +530,14 @@ pub fn run_stdio(key_file: PathBuf) {
                 },
                 Some(reply) = running.next(), if !running.is_empty() => {
                     if let Some(r) = reply {
-                        if writeln!(out, "{r}").is_err() || out.flush().is_err() {
-                            break;
+                        // The client is gone when writing fails. Requests that
+                        // are still running are let finish all the same, so
+                        // each one books what it cost.
+                        if open && (writeln!(out, "{r}").is_err() || out.flush().is_err()) {
+                            open = false;
+                        } else if !open {
+                            let _ = writeln!(out, "{r}");
+                            let _ = out.flush();
                         }
                     }
                 }
@@ -1300,7 +1348,10 @@ async fn grid_council(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
         match r {
             Ok(d) => {
                 add_cost(&d, &name);
-                let text = d["choices"][0]["message"]["content"].as_str().map(str::trim).unwrap_or("").to_string();
+                let mut text = d["choices"][0]["message"]["content"].as_str().map(str::trim).unwrap_or("").to_string();
+                if !text.is_empty() && was_cut(&d) {
+                    text.push_str("\n[this answer was cut off before the model finished]");
+                }
                 members.push(Member {
                     model: label(d["model"].as_str().unwrap_or(&name)),
                     worker: d["grid"]["worker"].as_str().map(str::trim).filter(|w| !w.is_empty()).map(label).unwrap_or_default(),
@@ -1364,6 +1415,12 @@ async fn grid_council(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
                     verdict = v;
                     answer = a;
                     diff = df;
+                    if was_cut(&d) {
+                        if diff.eq_ignore_ascii_case("none") {
+                            diff.clear();
+                        }
+                        diff.push_str("\nNote: the joint answer was cut off before the chair finished, so it may be incomplete.");
+                    }
                 }
             }
             Err(err) => {
@@ -1430,6 +1487,11 @@ async fn grid_council(ctx: &Ctx, args: &Value) -> Result<Vec<Value>, String> {
 
 /// An answer must not be able to close its own frame: the two marker lines
 /// are removed from it wherever they appear, in any letter case.
+/// Whether a chat answer ended at the token limit or with the connection.
+fn was_cut(d: &Value) -> bool {
+    matches!(d["choices"][0]["finish_reason"].as_str(), Some(f) if f == "length" || f.starts_with("cut off"))
+}
+
 /// A model or worker name as it may appear outside the untrusted frame.
 /// Worker names are chosen by whoever runs the worker, so only plain name
 /// characters are kept and the length is capped: a name cannot carry a

@@ -115,7 +115,36 @@ fn save(dir: &Path, v: &Value) -> Result<(), String> {
     }
     #[cfg(not(unix))]
     std::fs::write(&tmp, v.to_string()).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, file(dir)).map_err(|e| e.to_string())
+    replace_file(&tmp, &file(dir)).map_err(|e| e.to_string())
+}
+
+/// Put `tmp` in the place of `to`. On Windows the rename fails while another
+/// program (a virus scanner, a backup) holds `to` open, usually for a moment
+/// only: try again a few times, then write over it in place.
+pub(crate) fn replace_file(tmp: &Path, to: &Path) -> std::io::Result<()> {
+    for attempt in 0..6 {
+        if std::fs::rename(tmp, to).is_ok() {
+            return Ok(());
+        }
+        if attempt < 5 {
+            std::thread::sleep(Duration::from_millis(80));
+        }
+    }
+    let out = std::fs::copy(tmp, to).map(|_| ());
+    let _ = std::fs::remove_file(tmp);
+    out
+}
+
+/// Take a stale lock file away. Two waiters can both find it stale; a plain
+/// delete would let the second one remove the lock the first has just made.
+/// The rename succeeds for one of them only.
+pub(crate) fn remove_stale(lock: &Path) {
+    let mut gone = lock.as_os_str().to_owned();
+    gone.push(format!(".stale.{}", std::process::id()));
+    let gone = PathBuf::from(gone);
+    if std::fs::rename(lock, &gone).is_ok() {
+        let _ = std::fs::remove_file(&gone);
+    }
 }
 
 pub fn clear(dir: &Path) {
@@ -149,7 +178,7 @@ async fn lock(dir: &Path) -> Lock {
             .map(|d| d.as_secs() >= 40)
             .unwrap_or(false);
         if stale {
-            let _ = std::fs::remove_file(&path);
+            remove_stale(&path);
         } else {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
