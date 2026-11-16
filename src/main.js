@@ -18,7 +18,10 @@ let POLL = null;
 const MOBILE = /Android/i.test(navigator.userAgent);
 if (MOBILE) document.documentElement.classList.add("mobile");
 const MORE_VIEWS = ["models", "network", "settings", "more"];
-const DESKTOP_VIEWS = ["worker", "connect"];
+const MTABS = ["chat", "images", "mworkers", "more"];
+// what a desktop view becomes on the phone
+const MOBILE_VIEW = { worker: "mworkers", connect: "more", overview: "more", earnings: "mworkers" };
+let CUR_VIEW = null;
 
 /* ---------- theme ---------- */
 function applyTheme(t) {
@@ -132,7 +135,7 @@ async function loadOverview() {
   const hasKey = !!apiKey();
   $("#needkey").style.display = hasKey || SIGNED_IN ? "none" : "";
   if (!hasKey && SIGNED_IN) { setConn("err", "sign-in not renewed"); $("#stamp").textContent = "The grid could not be reached to renew your sign-in. Press Refresh to try again."; return; }
-  if (!hasKey) { setConn("", "not connected"); $("#stats").innerHTML = ""; $("#workers").innerHTML = '<p class="muted">—</p>'; renderHolder(null); return; }
+  if (!hasKey) { renderCredit(null); setConn("", "not connected"); $("#stats").innerHTML = ""; $("#workers").innerHTML = '<p class="muted">—</p>'; renderHolder(null); return; }
   setConn("", "loading…");
   try {
     const [w, c] = await Promise.all([api("/account/workers"), api("/account/credits")]);
@@ -143,9 +146,10 @@ async function loadOverview() {
       ${stat("Workers online", (() => {
         const hid = hiddenWorkers(), vis = (w.workers || []).filter((x) => !hid.includes(x.name));
         return w.workers ? `${vis.filter((x) => x.online).length} / ${vis.length}` : `${w.online || 0} / ${w.count || 0}`;
-      })(), "blue")}
-      ${stat("Den earned", fmtDen(w.den_earned ?? 0), "")}
-      ${stat("Jobs completed", (w.jobs_completed ?? 0), "")}`;
+      })(), "blue", "", "wk")}
+      ${stat("Den earned", fmtDen(w.den_earned ?? 0), "", "", "wk")}
+      ${stat("Jobs completed", (w.jobs_completed ?? 0), "", "", "wk")}`;
+    renderCredit(c);
     renderWorkers(w.workers || []);
     $("#stamp").textContent = "Updated " + new Date().toLocaleTimeString();
     checkTransitions(w.workers || []);
@@ -158,8 +162,8 @@ async function loadOverview() {
 }
 // Den amounts come as sums of fractions (550.3000000000001): show two decimals at most.
 function fmtDen(v) { const n = Number(v); return v == null || v === "" || !isFinite(n) ? "—" : String(Math.round(n * 100) / 100); }
-function stat(k, v, cls, note) {
-  return `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div>${note ? `<div class="n">${note}</div>` : ""}</div>`;
+function stat(k, v, cls, note, tile) {
+  return `<div class="stat${tile ? " " + tile : ""}"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div>${note ? `<div class="n">${note}</div>` : ""}</div>`;
 }
 /* The grid keeps three pockets: daily free allowance, promotional credit and
    purchased balance. `free.active === false` means the allowance is shown but
@@ -425,7 +429,7 @@ function renderEarnHistory(h) {
 function jobWhen(j) {
   const raw = j.created || j.ts || j.timestamp; if (!raw) return "—";
   const d = new Date(typeof raw === "string" ? raw.replace(/(\.\d{3})\d+/, "$1") : raw);
-  return isNaN(d) ? String(raw) : d.toLocaleString();
+  return isNaN(d) ? String(raw) : fmtTime(d);
 }
 async function loadEarnings() {
   loadPayouts().catch(() => {});
@@ -1772,7 +1776,7 @@ async function loadPayouts() {
   const rows = (mine && mine.payouts) || [];
   $("#payouts tbody").innerHTML = rows.slice(0, 30).map((p) => {
     const tx = String(p.tx_hash || ""), hash = tx && !tx.startsWith("0x") ? "0x" + tx : tx;
-    return `<tr><td>${esc(String(p.period_id || "").replace(/^hour-/, "").replace("T", " ") + ":00")}</td>
+    return `<tr><td>${esc(fmtTime(payAt(p)))}</td>
       <td>${esc(fmtDen(p.den))}</td><td>${esc(aipg(p.aipg, 6))}</td><td>${esc(p.status || "")}</td>
       <td>${hash ? `<a href="#" data-ext="https://basescan.org/tx/${esc(hash)}">${esc(hash.slice(0, 10))}…</a>` : "—"}</td></tr>`;
   }).join("") || `<tr><td colspan="5" class="muted">${mine ? "No payouts yet." : "Sign in or add an API key in Settings to see your payouts."}</td></tr>`;
@@ -1908,7 +1912,11 @@ function addMsg(role, text, model, att) {
     });
     el.appendChild(a);
   }
-  const body = document.createElement("span"); body.textContent = text; el.appendChild(body);
+  // replies are formatted (Markdown); what the user typed is shown as typed
+  const body = document.createElement(role === "user" ? "span" : "div");
+  body.className = "mbody";
+  if (role === "user") body.textContent = text; else setReply(body, text);
+  el.appendChild(body);
   $("#chatlog").appendChild(el); $("#chatlog").scrollTop = 1e9;
   return body;
 }
@@ -2458,7 +2466,7 @@ async function chatSendRun() {
       k.members.forEach((x) => { x.text = shown(x.text); });
       const n = k.members.filter((x) => x.text).length;
       reply = { role: "assistant", content: k.answer, model: `council · ${n} model${n === 1 ? "" : "s"}`, council: { ...k, at: Date.now() } };
-      body.textContent = k.answer;
+      setReply(body, k.answer);
       const tag = body.parentElement.querySelector(".mname"); if (tag) tag.textContent = reply.model;
       if (web) reply.web = { query: web.query, sources: web.sources };
       c.msgs.push(reply); c.updated = Date.now();
@@ -2492,7 +2500,7 @@ async function chatSendRun() {
           if (j.id) rid = j.id;
           if (j.grid && j.grid.worker) gridWorker = String(j.grid.worker);
           if (j.model) used = j.model;
-          if (delta.content) { acc += delta.content; body.textContent = shown(acc); }
+          if (delta.content) { acc += delta.content; setReply(body, shown(acc)); }
           if (delta.reasoning_content) think += delta.reasoning_content;
           $("#chatlog").scrollTop = 1e9;
         } catch (e) {}
@@ -2501,13 +2509,13 @@ async function chatSendRun() {
     if (!acc && think) acc = "(only reasoning returned) " + think.slice(0, 500);
     if (!acc) acc = "(empty response)";
     acc = shown(acc);
-    body.textContent = acc;
+    setReply(body, acc);
     reply = { role: "assistant", content: acc, model: label };
     if (src === "grid") { reply.rid = rid; reply.used = used || model; reply.t0 = sentAt; reply.t1 = Date.now(); if (gridWorker) reply.worker = gridWorker; }
     c.msgs.push(reply);
     c.updated = Date.now();
   } catch (e) {
-    if (e.name === "AbortError") { acc = shown(acc); body.textContent = acc + " …[stopped]"; c.msgs.push({ role: "assistant", content: acc, model: label }); }
+    if (e.name === "AbortError") { acc = shown(acc); setReply(body, acc + " …[stopped]"); c.msgs.push({ role: "assistant", content: acc, model: label }); }
     else { body.textContent = "⚠ " + emsg(e); c.msgs.pop(); }
   } finally {
     $("#chatsend").style.display = ""; $("#chatstop").style.display = "none"; CHAT_ABORT = null;
@@ -2801,6 +2809,90 @@ function wireImages() {
 function loadImages() { if (!IMG_WIRED) wireImages(); fillImgModels(); renderGallery(); }
 
 /* ---------- misc ---------- */
+/* ---------- Markdown for model replies ----------
+   Replies come from computers run by other people, so nothing from them may
+   reach innerHTML as markup. Every piece of text is escaped first; the only
+   tags in the result are the fixed ones written here. No links, no images,
+   no raw HTML. */
+function mdInline(s) {
+  return String(s).split(/(`[^`\n]+`)/).map((p) => {
+    if (/^`[^`\n]+`$/.test(p)) return "<code>" + esc(p.slice(1, -1)) + "</code>";
+    return esc(p)
+      .replace(/\*\*([^*\n]+?)\*\*/g, "<b>$1</b>")
+      .replace(/__([^_\n]+?)__/g, "<b>$1</b>")
+      .replace(/(^|[\s(])\*([^*\s][^*\n]*?)\*(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>");
+  }).join("");
+}
+function mdCells(line) {
+  let t = line.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|")) t = t.slice(0, -1);
+  return t.split("|").map((c) => c.trim());
+}
+function mdRender(src) {
+  const lines = String(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let para = [], i = 0;
+  const flush = () => { if (para.length) { out.push("<p>" + para.map(mdInline).join("<br>") + "</p>"); para = []; } };
+  const isSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l) && l.includes("-");
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) {                       // fenced code, also when the end is still missing
+      flush();
+      const body = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) body.push(lines[i++]);
+      i++;
+      out.push("<pre><code>" + esc(body.join("\n")) + "</code></pre>");
+      continue;
+    }
+    if (!l.trim()) { flush(); i++; continue; }
+    const h = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(l);
+    if (h) { flush(); out.push(`<h${h[1].length < 3 ? 3 : 4}>` + mdInline(h[2]) + `</h${h[1].length < 3 ? 3 : 4}>`); i++; continue; }
+    if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(l)) { flush(); out.push("<hr>"); i++; continue; }
+    if (l.includes("|") && i + 1 < lines.length && isSep(lines[i + 1])) {   // table
+      flush();
+      const head = mdCells(l);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) rows.push(mdCells(lines[i++]));
+      out.push('<div class="mdtable"><table><thead><tr>' + head.map((c) => "<th>" + mdInline(c) + "</th>").join("") + "</tr></thead><tbody>" +
+        rows.map((r) => "<tr>" + head.map((_, k) => "<td>" + mdInline(r[k] || "") + "</td>").join("") + "</tr>").join("") + "</tbody></table></div>");
+      continue;
+    }
+    const ul = /^\s*[-*+]\s+(.*)$/.exec(l), ol = /^\s*\d{1,3}[.)]\s+(.*)$/.exec(l);
+    if (ul || ol) {
+      flush();
+      const tag = ul ? "ul" : "ol", re = ul ? /^\s*[-*+]\s+(.*)$/ : /^\s*\d{1,3}[.)]\s+(.*)$/;
+      const items = [];
+      while (i < lines.length) {
+        const m = re.exec(lines[i]);
+        if (m) { items.push(m[1]); i++; }
+        else if (lines[i].trim() && /^\s{2,}\S/.test(lines[i]) && items.length) { items[items.length - 1] += "\n" + lines[i].trim(); i++; }
+        else break;
+      }
+      out.push(`<${tag}>` + items.map((t) => "<li>" + t.split("\n").map(mdInline).join("<br>") + "</li>").join("") + `</${tag}>`);
+      continue;
+    }
+    para.push(l);
+    i++;
+  }
+  flush();
+  return out.join("");
+}
+// Put a reply into its bubble as formatted text.
+function setReply(body, text) { body.classList.add("md"); body.innerHTML = mdRender(text); }
+
+// One time format everywhere: local time, 2026-11-16 08:07.
+function fmtTime(d) {
+  d = d instanceof Date ? d : new Date(d);
+  if (isNaN(d)) return "—";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+// A payout covers one UTC hour ("hour-2026-11-16T08"): its start as a Date.
+function payAt(p) { return new Date(String(p.period_id || "").replace(/^hour-/, "") + ":00:00Z"); }
+
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
 /* notify when new grid models appear (compared to what we've seen before) */
@@ -2823,10 +2915,20 @@ async function checkNewModels() {
 }
 
 /* ---------- views ---------- */
-function show(view) {
-  if (MOBILE && DESKTOP_VIEWS.includes(view)) view = "overview";
+function show(view, fromHistory) {
+  if (MOBILE && MOBILE_VIEW[view]) view = MOBILE_VIEW[view];
   // on a phone Models, Network and Settings sit behind "More" in the bottom bar
   const tab = MOBILE && MORE_VIEWS.includes(view) ? "more" : view;
+  if (view !== CUR_VIEW) {
+    if (MOBILE && !fromHistory) {
+      // every change of view is a history entry, so the back gesture walks
+      // back through the app before it leaves it
+      try { if (CUR_VIEW === null) history.replaceState({ view }, ""); else history.pushState({ view }, ""); } catch (e) {}
+    }
+    const m = $("main"); if (m) m.scrollTop = 0;
+    if (MOBILE && MTABS.includes(tab)) set("aipg_mtab", tab);
+  }
+  CUR_VIEW = view;
   $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === tab));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   if (view === "overview") { loadOverview(); renderUsage(); }
@@ -2837,7 +2939,104 @@ function show(view) {
   if (view === "earnings") loadEarnings();
   if (view === "connect") loadConnect();
   if (view === "network") loadNetwork();
+  if (view === "mworkers") loadMWorkers();
+  if (view === "more") loadOverview();
 }
+
+/* ---------- phone: Workers tab (worker list and earnings in one place) ---------- */
+let MW_ALL = false, MW_DATA = null;
+function isSelftest(w) { return /selftest/i.test(w.name || "") || (w.models || []).some((m) => /selftest/i.test(m)); }
+function mwRow(w) {
+  const state = w.maintenance ? "maint" : w.online ? "on" : "off";
+  const right = w.online || w.maintenance
+    ? `${esc(fmtDen(w.den_earned ?? 0))} den · ${esc(w.jobs_completed ?? 0)} jobs`
+    : (w.last_seen ? "last seen " + esc(timeAgo(w.last_seen)) : "offline");
+  return `<div class="mrow one"><span class="mdot ${state}"></span><span class="mname2">${esc(w.name)}</span><span class="mval">${right}</span></div>`;
+}
+function renderMWorkers() {
+  const d = MW_DATA;
+  if (!d) return;
+  const ws = d.w.workers || [], real = ws.filter((x) => !isSelftest(x));
+  const pays = (d.p && d.p.payouts) || [], since = Date.now() - 86400000;
+  const den24 = d.p ? pays.filter((x) => payAt(x).getTime() >= since).reduce((s, x) => s + (Number(x.den) || 0), 0) : null;
+  $("#mw-stats").innerHTML =
+    stat("Online", `${real.filter((x) => x.online).length} / ${real.length}`, "blue") +
+    stat("Den, 24 h", den24 == null ? "—" : esc(fmtDen(den24)), "", `${esc(fmtDen(d.w.den_earned ?? 0))} in total`) +
+    (d.p ? stat("Paid", esc(aipg(d.p.paid_aipg)), "green", "AIPG, all time") + stat("Waiting", esc(aipg(d.p.accrued_aipg)), "", "AIPG earned, not yet sent") : "");
+  const up = ws.filter((x) => (x.online || x.maintenance) && !isSelftest(x));
+  const rest = ws.filter((x) => !up.includes(x));
+  $("#mw-list").innerHTML = !ws.length ? '<p class="muted">No workers on this account yet.</p>'
+    : (up.map(mwRow).join("") || '<p class="muted">No worker is online.</p>') +
+      (rest.length ? `<details class="adv mwrest"><summary>${rest.length} offline or self-test</summary>${rest.map(mwRow).join("")}</details>` : "");
+  $("#mw-wallet").innerHTML = !d.p ? ""
+    : d.p.payout_wallet ? `Payouts go to <code>${esc(shortAddr(d.p.payout_wallet))}</code> on Base.`
+      : `<b>No payout address set</b>, so nothing can be paid out. Add a Base address in the Console under your account settings. <a href="#" data-ext="${CONSOLE_URL}">Open the Console →</a>`;
+  const list = MW_ALL ? pays.slice(0, 30) : pays.slice(0, 5);
+  $("#mw-pay").innerHTML = (list.map((p) => {
+    const tx = String(p.tx_hash || ""), hash = tx && !tx.startsWith("0x") ? "0x" + tx : tx;
+    return `<div class="mrow"><div class="mline"><span>${esc(fmtTime(payAt(p)))}</span><b>${esc(aipg(p.aipg, 6))} AIPG</b></div>
+      <div class="mline sub"><span>${esc(fmtDen(p.den))} den · ${esc(p.status || "")}</span>${hash ? `<a href="#" data-ext="https://basescan.org/tx/${esc(hash)}">transaction →</a>` : "<span></span>"}</div></div>`;
+  }).join("") || `<p class="muted">${d.p ? "No payouts yet." : "The payouts could not be loaded."}</p>`) +
+    (pays.length > 5 ? `<div class="row"><button class="btn ghost" id="mw-more">${MW_ALL ? "Show fewer" : `Show all (${Math.min(pays.length, 30)})`}</button></div>` : "");
+  const mb = $("#mw-more");
+  if (mb) mb.onclick = () => { MW_ALL = !MW_ALL; renderMWorkers(); };
+  const jobs = (d.j && d.j.jobs) || [];
+  $("#mw-jobs").innerHTML = jobs.slice(0, 30).map((j) => `<div class="mrow"><div class="mline"><span>${esc(j.model || "—")}</span><b>+${esc(fmtDen(j.den))} den</b></div>
+      <div class="mline sub"><span>${esc(jobWhen(j))} · ${esc(j.type || "")}</span><span>${esc(j.output_units ?? "—")} units${j.duration_s != null ? " · " + esc(j.duration_s) + " s" : ""}</span></div></div>`).join("")
+    || '<p class="muted">No jobs yet.</p>';
+  $("#mw-jobsbox").style.display = "";
+}
+async function loadMWorkers() {
+  if (!apiKey() && SIGNED_IN && Date.now() - AUTH_AT > 15000) await refreshAuth();
+  if (!apiKey()) {
+    MW_DATA = null;
+    $("#mw-stats").innerHTML = "";
+    $("#mw-list").innerHTML = '<p class="muted">Sign in or add an API key under More → Settings to see your workers and what they earned.</p>';
+    $("#mw-wallet").innerHTML = ""; $("#mw-pay").innerHTML = ""; $("#mw-jobs").innerHTML = "";
+    $("#mw-jobsbox").style.display = "none"; $("#mw-stamp").textContent = "";
+    return;
+  }
+  try {
+    const [w, p, j] = await Promise.all([api("/account/workers"), api("/account/payouts").catch(() => null), api("/account/jobs").catch(() => null)]);
+    MW_DATA = { w, p, j };
+    LAST_WORKERS = w.workers || [];
+    renderMWorkers();
+    checkTransitions(LAST_WORKERS);
+    $("#mw-stamp").textContent = "Updated " + fmtTime(new Date());
+  } catch (e) {
+    $("#mw-stamp").textContent = e.message === "no-key" ? "" : "Could not load: " + emsg(e);
+  }
+}
+// The small credit figure above the chat, and the account line in More.
+function renderCredit(c) {
+  const chip = $("#chatcredit");
+  if (chip) { chip.hidden = !c; if (c) chip.textContent = money(c.total_spendable_usd) + " credit"; }
+  renderAcctState();
+}
+function renderAcctState() {
+  const st = $("#m-acctstate");
+  if (st) st.textContent = SIGNED_IN ? "Signed in with your browser." : gridKey() ? "Connected with an API key." : "";
+}
+/* phone: the chat options live in a sheet, each with its explanation (a touch
+   screen has no tooltips). The controls themselves are moved, so they keep
+   their ids and handlers. */
+function wireOptSheet() {
+  const list = $("#optlist");
+  $$("#view-chat .chatbar label.seg[title]").forEach((l) => {
+    if (l.classList.contains("donly")) return;
+    const row = document.createElement("div"); row.className = "optrow";
+    const hint = document.createElement("p"); hint.className = "hint"; hint.textContent = l.title;
+    l.removeAttribute("title");
+    row.appendChild(l); row.appendChild(hint); list.appendChild(row);
+  });
+  $("#chatopts").onclick = () => {
+    $("#optsheet").style.display = "";
+    try { history.pushState({ view: CUR_VIEW, sheet: true }, ""); } catch (e) {}
+  };
+  $("#optclose").onclick = () => history.back();
+  $("#optsheet").addEventListener("click", (e) => { if (e.target.id === "optsheet") history.back(); });
+}
+
 
 /* ---------- network: live structure of the grid (public data, no key) ----------
    The grid publishes no worker locations, so this is a diagram of who serves
@@ -2887,6 +3086,21 @@ function renderNetwork(net, wk, jobs, totals) {
   const workers = wk.slice().sort((a, b) =>
     String((a.job_types || [])[0]).localeCompare(String((b.job_types || [])[0])) || a.name.localeCompare(b.name));
   const models = (cap.models || []).slice().sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
+  if (MOBILE) {
+    // phone: a list instead of the diagram, which needs 680 px of width
+    const now = Date.now();
+    $("#netmap").innerHTML = workers.map((w) => {
+      const a = act[w.name], hot = a && now - a.last < NET_RECENT;
+      const sub = a ? `${a.n} job${a.n === 1 ? "" : "s"} · last ${timeAgo(new Date(a.last).toISOString())}` : "no recent jobs";
+      return `<div class="mrow${hot ? " hot" : ""}"><div class="mline"><b>${esc(w.name)}${mine.has(w.name) ? " (yours)" : ""}</b><span>${esc(sub)}</span></div>
+        <div class="mline sub"><span>${esc((w.models || []).join(", ") || "—")}</span></div></div>`;
+    }).join("") || '<p class="muted">No workers are online right now.</p>';
+    $("#netfeed").innerHTML = jobs.slice(0, 15).map((j) => `<tr><td colspan="6"><div class="mline"><span>${esc(j.model)}</span><b>+${Number(j.den || 0).toFixed(2)} den</b></div>
+      <div class="mline sub"><span>${esc(j.worker)}</span><span>${esc(timeAgo(j.created))} · ${esc(j.type)}${j.duration_s != null ? " · " + Number(j.duration_s).toFixed(1) + " s" : ""}</span></div></td></tr>`).join("")
+      || '<tr><td colspan="6" class="muted">No recent jobs.</td></tr>';
+    $("#netstamp").textContent = "Updated " + new Date().toLocaleTimeString();
+    return;
+  }
   if (!workers.length) { $("#netmap").innerHTML = '<p class="muted">No workers are online right now.</p>'; }
   else {
     const ROW = 44, W = 920, XW = 350, XM = 570, PAD = 26;
@@ -3134,6 +3348,19 @@ document.addEventListener("DOMContentLoaded", () => {
   $$(".nav").forEach((b) => (b.onclick = () => show(b.dataset.view)));
   $$(".morerow").forEach((b) => (b.onclick = () => show(b.dataset.go)));
   if (MOBILE) {
+    // account figures live in More on the phone: move them there once
+    ["#needkey", "#stats", "#holder"].forEach((id) => { const el = $(id); if (el) $("#m-acct").appendChild(el); });
+    $$(".appname").forEach((el) => { el.textContent = "AIPG Mobile"; });
+    document.title = "AIPG Mobile";
+    $("#refresh-more").onclick = loadOverview;
+    $("#refresh-mw").onclick = loadMWorkers;
+    $("#chatcredit").onclick = () => show("more");
+    wireOptSheet();
+    window.addEventListener("popstate", (e) => {
+      $("#optsheet").style.display = "none";
+      const v = e.state && e.state.view;
+      if (v) show(v, true);
+    });
     // While the keyboard is up the page is much shorter: give the bottom bar's
     // room to the page. Measured by height, not by focus, because closing the
     // keyboard with the back gesture leaves the focus in the text field.
@@ -3212,7 +3439,12 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(() => usageAccrue(), 30000);
   setInterval(renderUsage, 300000);
   window.addEventListener("pagehide", () => usageAccrue(true));
-  show("overview");
+  if (MOBILE) {
+    // start where the user was last; the credit figure needs the account data either way
+    const last = get("aipg_mtab");
+    show(MTABS.includes(last) ? last : "chat");
+    if (CUR_VIEW !== "more") loadOverview();
+  } else show("overview");
   startPolling();
   // a browser sign-in from an earlier run: fetch its token, then load again
   refreshAuth().then(() => {
@@ -3297,7 +3529,9 @@ function renderAccount() {
   $("#field-account").style.display = TAURI.core ? "" : "none";
   $("#wc-signin-box").style.display = TAURI.core ? "" : "none";
   $("#acct-state").textContent = SIGNING ? "Waiting for the browser…"
-    : SIGNED_IN ? "Signed in" + (gridKey() ? " · the API key below is used first" : "") : "Not signed in";
+    : SIGNED_IN ? "Signed in" + (gridKey() ? " · the API key below is used first" : "")
+    : gridKey() ? "API key active · not signed in with the browser" : "Not signed in";
+  renderAcctState();
   $("#acct-signin").style.display = SIGNING || SIGNED_IN ? "none" : "";
   $("#acct-cancel").style.display = SIGNING ? "" : "none";
   $("#acct-signout").style.display = SIGNED_IN && !SIGNING ? "" : "none";

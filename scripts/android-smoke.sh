@@ -39,17 +39,23 @@ adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1
 sleep 35
 tap_text "Wait" || true
 shot 01-welcome 2
-tap_text "Not now"; shot 02-overview
-tap_text "Chat"; shot 03-chat
-adb shell input tap 540 2000; shot 04-chat-keyboard 5
-adb shell input keyevent KEYCODE_BACK; sleep 2
+tap_text "Not now"; shot 02-start-chat
+tap_text "Options"; shot 03-chat-options 2
+adb shell input keyevent KEYCODE_BACK; shot 04-back-closes-options 2
 tap_text "Images"; shot 05-images
-tap_text "Earnings"; shot 06-earnings
-tap_text "More"; shot 07-more 2
-tap_text "Network *"; shot 08-network 8
-tap_text "More"; sleep 2; tap_text "Settings *"; shot 09-settings
-adb shell input swipe 540 1800 540 600 300; shot 09b-settings-lower 2
-tap_text "More"; sleep 2; tap_text "Models *"; shot 10-models 6
+tap_text "Workers"; shot 06-workers
+tap_text "More"; shot 07-more
+tap_text "Models *"; shot 08-models 6
+adb shell input keyevent KEYCODE_BACK; shot 09-back-from-models 2
+tap_text "Network *"; shot 10-network 8
+adb shell input swipe 540 1800 540 500 300; shot 10b-network-jobs 2
+adb shell input keyevent KEYCODE_BACK; sleep 2
+tap_text "Settings *"; shot 11-settings
+adb shell input swipe 540 1800 540 300 300; shot 11b-settings-lower 2
+adb shell input keyevent KEYCODE_BACK; sleep 2
+tap_text "Chat"; sleep 2
+adb shell input tap 540 2000; shot 12-chat-keyboard 5
+adb shell input keyevent KEYCODE_BACK; shot 13-keyboard-closed 3
 
 adb shell pidof $PKG > out/pid.txt || echo "NOT RUNNING" > out/pid.txt
 adb shell wm size > out/size.txt

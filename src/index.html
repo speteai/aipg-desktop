@@ -9,15 +9,16 @@
 <body>
   <nav class="side">
     <div class="brand"><img src="aipg-logo.png" alt="" class="logo"><span>AIPG <small>Desktop</small></span></div>
-    <button class="nav active" data-view="overview"><span class="ni"></span> Overview</button>
+    <button class="nav active dnav" data-view="overview"><span class="ni"></span> Overview</button>
     <button class="nav" data-view="chat"><span class="ni"></span> Chat</button>
     <button class="nav" data-view="images"><span class="ni"></span> Images</button>
     <button class="nav donly" data-view="worker"><span class="ni"></span> Run a worker<span id="navjob" class="navjob" title="Serving a grid job"></span></button>
     <button class="nav mmore" data-view="models"><span class="ni"></span> Models</button>
     <button class="nav mmore" data-view="network"><span class="ni"></span> Network</button>
-    <button class="nav" data-view="earnings"><span class="ni"></span> Earnings</button>
+    <button class="nav dnav" data-view="earnings"><span class="ni"></span> Earnings</button>
     <button class="nav donly" data-view="connect"><span class="ni"></span> Connect</button>
     <button class="nav mmore" data-view="settings"><span class="ni"></span> Settings</button>
+    <button class="nav monly" data-view="mworkers"><span class="ni"></span> Workers</button>
     <button class="nav monly" data-view="more"><span class="ni"></span> More</button>
     <div class="spacer"></div>
     <div class="conn" id="conn"><span class="dot" id="conndot"></span><span id="connlabel">not connected</span></div>
@@ -79,6 +80,7 @@
       <div class="chatwrap">
         <aside class="chatside">
           <button class="btn" id="chatnew">+ New chat</button>
+          <button class="chip creditchip monly" id="chatcredit" hidden></button>
           <div id="chatlist" class="chatlist"></div>
           <p class="hint" style="margin-top:auto">Chats are stored locally on this device.</p>
         </aside>
@@ -87,6 +89,7 @@
             <label class="seg donly"><input type="radio" name="chatsrc" value="grid" checked> Grid</label>
             <label class="seg donly"><input type="radio" name="chatsrc" value="local"> Local</label>
             <select id="chatmodel" class="sel"></select>
+            <button class="btn ghost monly" id="chatopts">Options</button>
             <span class="spacer"></span>
             <label class="seg" title="Only send the last N messages — saves grid cost">Context
               <select id="chatcap" class="sel">
@@ -99,7 +102,7 @@
             <label class="seg" title="Summarize older messages instead of dropping them"><input type="checkbox" id="chatsum"> Summarize</label>
             <label class="seg" title="Check every grid reply: a second model answers the same question and the two answers are compared. Costs two extra requests per reply. You can also check single replies with the link below them."><input type="checkbox" id="chatcheck"> Cross-check</label>
             <label class="seg" title="Council: every text model that is online answers the question on its own, then one of them writes a joint answer and says where the others agree or differ. One request per model plus one for the joint answer. Agreement is not proof: models can share the same mistake."><input type="checkbox" id="chatcouncil"> Council</label>
-            <label class="seg" title="Search the web for each question and give the results to the model: recent news and Wikipedia, plus a general web search if you stored a search key in Settings. A web address in your message is read as well. The search runs on this computer; the search words go to the search services."><input type="checkbox" id="chatweb"> Web</label>
+            <label class="seg" title="Search the web for each question and give the results to the model: recent news and Wikipedia, plus a general web search if you stored a search key in Settings. A web address in your message is read as well. The search runs on this device; the search words go to the search services."><input type="checkbox" id="chatweb"> Web</label>
             <label class="seg donly" title="This chat never leaves this computer: it can only use a local model"><input type="checkbox" id="chatlocal"> Local only</label>
           </div>
           <p class="hint donly" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
@@ -419,7 +422,8 @@
         shows which worker serves which model rather than a geographic map.</p>
       <div class="stats" id="netstats"></div>
       <div id="netmap" class="netmap"><p class="muted">Loading…</p></div>
-      <p class="hint netlegend"><span class="lgi"><span class="lg hot"></span>served a job in the last 10 minutes</span>
+      <p class="hint monly">An orange bar marks a worker that served a job in the last 10 minutes.</p>
+      <p class="hint netlegend donly"><span class="lgi"><span class="lg hot"></span>served a job in the last 10 minutes</span>
         <span class="lgi"><span class="lg used"></span>served one of the last 100 jobs</span>
         <span class="lgi"><span class="lg"></span>online, idle</span></p>
       <h2 class="sec">Latest jobs on the grid</h2>
@@ -437,7 +441,7 @@
       <div class="stats" id="pstats"></div>
       <p class="hint" id="pwallet"></p>
       <div class="tablewrap"><table id="payouts"><thead><tr>
-        <th>hour (UTC)</th><th>den</th><th>AIPG</th><th>status</th><th>transaction</th>
+        <th>hour</th><th>den</th><th>AIPG</th><th>status</th><th>transaction</th>
       </tr></thead><tbody></tbody></table></div>
       <p class="hint" id="pnet"></p>
       <h2 class="sec">Recent jobs</h2>
@@ -604,6 +608,8 @@
       <div class="field">
         <label><input type="checkbox" id="alerts"> Offline alerts (native notifications while the app is open)</label>
         <p class="hint">Notifies you when a worker goes offline, enters maintenance, or recovers. Checks every 2 minutes.</p>
+        <p class="hint monly">A phone only checks while this app is open. For alerts at any time, set an ntfy topic in AIPG Desktop
+          on the computer that runs the worker, and subscribe to that topic in the ntfy app on this phone.</p>
       </div>
       <div class="field donly" id="field-autostart">
         <label><input type="checkbox" id="autostart"> Start the worker automatically when the app opens</label>
@@ -655,7 +661,7 @@
       </div>
       <div class="field" id="field-support">
         <label>Support this project</label>
-        <p class="hint">AIPG Desktop is free, unofficial and built in spare time. If it is useful to you,
+        <p class="hint"><span class="appname">AIPG Desktop</span> is free, unofficial and built in spare time. If it is useful to you,
           a voluntary tip on the <b>Base</b> network (ETH or USDC) is welcome. Nothing in the app depends on it.</p>
         <pre id="donate-addr" class="log cnpre">0x1C0356d4ff32aEe3DF28Acf941335A1823dB50A4</pre>
         <div class="row"><button class="btn" id="donate-copy">Copy address</button></div>
@@ -670,10 +676,10 @@
         <p class="hint">The “Web” switch in the chat works without a key: it finds recent news and Wikipedia articles and reads web addresses you
           paste. With your own key it also searches the whole web.
           <a href="#" data-ext="https://tavily.com">Tavily</a> has a free monthly allowance;
-          <a href="#" data-ext="https://brave.com/search/api/">Brave Search</a> works too. The key stays on this computer and is sent only to that
+          <a href="#" data-ext="https://brave.com/search/api/">Brave Search</a> works too. The key stays on this device and is sent only to that
           service.</p>
       </div>
-      <div class="field">
+      <div class="field donly">
         <label>ntfy topic (optional — push to your phone too)</label>
         <div class="row">
           <input id="ntfy" type="text" placeholder="aipg-… (a long random string)" autocomplete="off" spellcheck="false">
@@ -686,13 +692,27 @@
         <div class="row"><button class="btn" id="theme">Toggle light / dark</button></div>
       </div>
       <div class="field">
-        <p class="hint">AIPG Desktop · unofficial, community-built · not affiliated with AI Power Grid.
+        <p class="hint"><span class="appname">AIPG Desktop</span> · unofficial, community-built · not affiliated with AI Power Grid.
           <a href="#" data-ext="https://github.com/speteai/aipg-desktop">Source on GitHub</a></p>
       </div>
     </section>
+    <!-- WORKERS (phone only: the account's workers and what they earned) -->
+    <section class="view" id="view-mworkers">
+      <header class="vh"><h1>Workers</h1><button class="btn" id="refresh-mw">Refresh</button></header>
+      <div class="stats" id="mw-stats"></div>
+      <div id="mw-list" class="mlist"><p class="muted">—</p></div>
+      <h2 class="sec">Payouts</h2>
+      <p class="hint" id="mw-wallet"></p>
+      <div id="mw-pay" class="mlist"></div>
+      <details class="adv" id="mw-jobsbox"><summary>Recent jobs</summary><div id="mw-jobs" class="mlist"></div></details>
+      <p class="stamp" id="mw-stamp"></p>
+    </section>
+
     <!-- MORE (phone only: the views that do not fit the bottom bar) -->
     <section class="view" id="view-more">
-      <header class="vh"><h1>More</h1></header>
+      <header class="vh"><h1>More</h1><button class="btn" id="refresh-more">Refresh</button></header>
+      <p class="hint" id="m-acctstate"></p>
+      <div id="m-acct"></div>
       <div class="morelist">
         <button class="morerow" data-go="models"><b>Models</b><span>The models on the grid and their prices</span></button>
         <button class="morerow" data-go="network"><b>Network</b><span>Who serves what on the grid, live</span></button>
@@ -726,6 +746,13 @@
       </div>
       <p class="hint">Without an account you can still look at the network and the model list<span class="donly">, and chat with a
         model on your own computer</span>.</p>
+    </div>
+  </div>
+
+  <div id="optsheet" class="overlay sheet" style="display:none">
+    <div class="sheetcard">
+      <div class="vh"><h2 class="sec" style="margin:0">Chat options</h2><button class="btn" id="optclose">Done</button></div>
+      <div id="optlist"></div>
     </div>
   </div>
 

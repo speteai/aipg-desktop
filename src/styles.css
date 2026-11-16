@@ -605,7 +605,6 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 
 .monly{display:none}
 .mobile .donly{display:none !important}
-.mobile span.monly{display:inline}
 .mobile body{flex-direction:column}
 .mobile main{order:1;padding:var(--s4) var(--s4) var(--s5)}
 .mobile .side{order:2;width:auto;flex:none;flex-direction:row;align-items:stretch;gap:0;
@@ -635,12 +634,80 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .mobile .overlay{align-items:flex-start;overflow-y:auto;padding:var(--s4)}
 .mobile .toast{bottom:76px}
 
+/* phone, second pass: four tabs, lists instead of tables, the option sheet */
+.mobile .monly{display:revert}
+.mobile .nav.dnav{display:none}
+.mobile #m-acct .stat.wk{display:none}
+.mobile #m-acct{margin-bottom:var(--s4)}
+.mobile #m-acctstate{margin:0 0 var(--s2)}
+
+.creditchip{cursor:pointer;background:none;font:var(--t-micro)/1.3 var(--mono);color:var(--fg);margin-left:auto}
+.mobile .chatside{flex-wrap:nowrap}
+.mobile #chatopts{border-color:var(--bd-strong);color:var(--fg)}
+.mobile .chatbar > .sel{min-width:0;flex:1 1 auto;max-width:none}
+.mobile .chatbar{overflow:visible}
+
+.sheet{align-items:flex-end !important;padding:0 !important}
+.sheetcard{width:100%;max-height:82%;overflow-y:auto;background:var(--panel);
+  border-top:2px solid var(--acc-fill);padding:var(--s4) var(--s4) var(--s5)}
+.optrow{border-top:1px solid var(--bd);padding:var(--s3) 0}
+.optrow .seg{font-size:var(--t-body);color:var(--fg);font-weight:600;gap:10px}
+.optrow .seg input[type=checkbox]{width:20px;height:20px}
+.optrow .hint{margin:var(--s1) 0 0}
+
+.mlist{border-top:1px solid var(--bd-strong)}
+.mlist > p.muted{margin:var(--s3) 0}
+.mrow{padding:10px 0;border-bottom:1px solid var(--bd);min-width:0}
+.mrow.one{display:flex;align-items:center;gap:10px}
+.mrow.hot{border-left:2px solid var(--acc-fill);padding-left:10px}
+.mdot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;border:1px solid var(--faint)}
+.mdot.on{background:var(--ok);border-color:var(--ok)}
+.mdot.maint{background:var(--warn);border-color:var(--warn)}
+.mname2{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.mval{flex:0 0 auto;color:var(--mut);font:var(--t-small)/1.3 var(--mono)}
+.mline{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);min-width:0}
+.mline > :first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mline > :last-child{flex:0 0 auto;text-align:right}
+.mline b{font:600 var(--t-small)/1.4 var(--mono)}
+.mline.sub{margin-top:2px;color:var(--mut);font-size:var(--t-small)}
+.mwrest{margin-top:0}
+.mwrest > summary{padding:10px 0}
+
+.mobile #view-network table thead{display:none}
+.mobile #view-network td{white-space:normal;padding-right:0}
+.mobile #view-network table{font-family:var(--sans)}
+.mobile .netmap{overflow:visible;border-bottom:0}
+
+.mobile #view-images .chatbar{flex-wrap:wrap;overflow:visible}
+.mobile #imgmodel{flex:1 1 100%;width:100%;max-width:none}
+
 .morelist{border-top:1px solid var(--bd)}
 .morerow{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;
   background:none;border:0;border-bottom:1px solid var(--bd);
   color:var(--fg);font:inherit;padding:14px 0;cursor:pointer}
 .morerow span{color:var(--mut);font-size:var(--t-small)}
 .morerow:active{background:var(--panel2)}
+
+
+/* 17 · Formatted replies (Markdown) ======================================== */
+
+.msg .md{white-space:normal}
+.msg .md > :first-child{margin-top:0}
+.msg .md > :last-child{margin-bottom:0}
+.msg .md p{margin:0 0 var(--s3)}
+.msg .md h3,.msg .md h4{margin:var(--s4) 0 var(--s2);font-size:var(--t-body);line-height:1.4;font-weight:650}
+.msg .md h3{font-size:var(--t-lead)}
+.msg .md ul,.msg .md ol{margin:0 0 var(--s3);padding-left:22px}
+.msg .md li{margin:2px 0}
+.msg .md hr{border:0;border-top:1px solid var(--bd);margin:var(--s3) 0}
+.msg .md pre{margin:0 0 var(--s3);padding:var(--s3);background:var(--code);border:1px solid var(--bd);
+  border-radius:var(--r);overflow-x:auto;white-space:pre;font:var(--t-small)/1.5 var(--mono)}
+.msg .md pre code{background:none;border:0;padding:0;font-size:inherit}
+.msg .md .mdtable{overflow-x:auto;margin:0 0 var(--s3);border-top:1px solid var(--bd-strong)}
+.msg .md table{width:auto;min-width:60%;font:var(--t-small)/1.45 var(--sans)}
+.msg .md th,.msg .md td{white-space:normal;vertical-align:top;padding-right:var(--s4)}
+.msg .md th{font:600 var(--t-small)/1.4 var(--sans);letter-spacing:0;text-transform:none;color:var(--fg)}
+[hidden]{display:none !important}
 
 
 /* 15 · Reduced motion ===================================================== */
