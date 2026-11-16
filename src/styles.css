@@ -667,9 +667,9 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .mval{flex:0 0 auto;color:var(--mut);font:var(--t-small)/1.3 var(--mono)}
 .mline{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);min-width:0}
 .mline > :first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mline > :last-child{flex:0 0 auto;text-align:right}
+.mline > :last-child:not(:first-child){flex:0 0 auto;text-align:right}
 .mline b{font:600 var(--t-small)/1.4 var(--mono)}
-.mline.sub{margin-top:2px;color:var(--mut);font-size:var(--t-small)}
+.mline.msub{margin-top:2px;color:var(--mut);font-size:var(--t-small)}
 .mwrest{margin-top:0}
 .mwrest > summary{padding:10px 0}
 

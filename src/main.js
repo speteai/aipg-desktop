@@ -2975,14 +2975,14 @@ function renderMWorkers() {
   $("#mw-pay").innerHTML = (list.map((p) => {
     const tx = String(p.tx_hash || ""), hash = tx && !tx.startsWith("0x") ? "0x" + tx : tx;
     return `<div class="mrow"><div class="mline"><span>${esc(fmtTime(payAt(p)))}</span><b>${esc(aipg(p.aipg, 6))} AIPG</b></div>
-      <div class="mline sub"><span>${esc(fmtDen(p.den))} den · ${esc(p.status || "")}</span>${hash ? `<a href="#" data-ext="https://basescan.org/tx/${esc(hash)}">transaction →</a>` : "<span></span>"}</div></div>`;
+      <div class="mline msub"><span>${esc(fmtDen(p.den))} den · ${esc(p.status || "")}</span>${hash ? `<a href="#" data-ext="https://basescan.org/tx/${esc(hash)}">transaction →</a>` : "<span></span>"}</div></div>`;
   }).join("") || `<p class="muted">${d.p ? "No payouts yet." : "The payouts could not be loaded."}</p>`) +
     (pays.length > 5 ? `<div class="row"><button class="btn ghost" id="mw-more">${MW_ALL ? "Show fewer" : `Show all (${Math.min(pays.length, 30)})`}</button></div>` : "");
   const mb = $("#mw-more");
   if (mb) mb.onclick = () => { MW_ALL = !MW_ALL; renderMWorkers(); };
   const jobs = (d.j && d.j.jobs) || [];
   $("#mw-jobs").innerHTML = jobs.slice(0, 30).map((j) => `<div class="mrow"><div class="mline"><span>${esc(j.model || "—")}</span><b>+${esc(fmtDen(j.den))} den</b></div>
-      <div class="mline sub"><span>${esc(jobWhen(j))} · ${esc(j.type || "")}</span><span>${esc(j.output_units ?? "—")} units${j.duration_s != null ? " · " + esc(j.duration_s) + " s" : ""}</span></div></div>`).join("")
+      <div class="mline msub"><span>${esc(jobWhen(j))} · ${esc(j.type || "")}</span><span>${esc(j.output_units ?? "—")} units${j.duration_s != null ? " · " + esc(j.duration_s) + " s" : ""}</span></div></div>`).join("")
     || '<p class="muted">No jobs yet.</p>';
   $("#mw-jobsbox").style.display = "";
 }
@@ -3093,10 +3093,10 @@ function renderNetwork(net, wk, jobs, totals) {
       const a = act[w.name], hot = a && now - a.last < NET_RECENT;
       const sub = a ? `${a.n} job${a.n === 1 ? "" : "s"} · last ${timeAgo(new Date(a.last).toISOString())}` : "no recent jobs";
       return `<div class="mrow${hot ? " hot" : ""}"><div class="mline"><b>${esc(w.name)}${mine.has(w.name) ? " (yours)" : ""}</b><span>${esc(sub)}</span></div>
-        <div class="mline sub"><span>${esc((w.models || []).join(", ") || "—")}</span></div></div>`;
+        <div class="mline msub"><span>${esc((w.models || []).join(", ") || "—")}</span></div></div>`;
     }).join("") || '<p class="muted">No workers are online right now.</p>';
     $("#netfeed").innerHTML = jobs.slice(0, 15).map((j) => `<tr><td colspan="6"><div class="mline"><span>${esc(j.model)}</span><b>+${Number(j.den || 0).toFixed(2)} den</b></div>
-      <div class="mline sub"><span>${esc(j.worker)}</span><span>${esc(timeAgo(j.created))} · ${esc(j.type)}${j.duration_s != null ? " · " + Number(j.duration_s).toFixed(1) + " s" : ""}</span></div></td></tr>`).join("")
+      <div class="mline msub"><span>${esc(j.worker)}</span><span>${esc(timeAgo(j.created))} · ${esc(j.type)}${j.duration_s != null ? " · " + Number(j.duration_s).toFixed(1) + " s" : ""}</span></div></td></tr>`).join("")
       || '<tr><td colspan="6" class="muted">No recent jobs.</td></tr>';
     $("#netstamp").textContent = "Updated " + new Date().toLocaleTimeString();
     return;
