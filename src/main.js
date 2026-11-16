@@ -3443,7 +3443,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     // start logo: stays for a moment, then fades out
     const sp = $("#splash");
-    if (sp) setTimeout(() => { sp.classList.add("gone"); setTimeout(() => { sp.style.display = "none"; }, 450); }, 1300);
+    // counted from the first drawn frame, so a slow start does not eat the time
+    if (sp) requestAnimationFrame(() => requestAnimationFrame(() =>
+      setTimeout(() => { sp.classList.add("gone"); setTimeout(() => { sp.style.display = "none"; }, 450); }, 1600)));
     // While the keyboard is up the page is much shorter: give the bottom bar's
     // room to the page. Measured by height, not by focus, because closing the
     // keyboard with the back gesture leaves the focus in the text field.
