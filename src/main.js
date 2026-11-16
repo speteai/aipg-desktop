@@ -151,7 +151,7 @@ async function loadOverview() {
       ${stat("Jobs completed", (w.jobs_completed ?? 0), "", "", "wk")}`;
     renderCredit(c);
     renderWorkers(w.workers || []);
-    $("#stamp").textContent = "Updated " + new Date().toLocaleTimeString();
+    $("#stamp").textContent = "Updated " + fmtClock(new Date());
     checkTransitions(w.workers || []);
     renderHolder(c.free);
   } catch (e) {
@@ -2478,6 +2478,7 @@ async function chatSendRun() {
     } finally {
       $("#chatsend").style.display = ""; $("#chatstop").style.display = "none"; CHAT_ABORT = null;
       storePersist(); $("#chatlog").scrollTop = 1e9;
+      refreshCredit();
     }
     return;
   }
@@ -2522,6 +2523,7 @@ async function chatSendRun() {
     storePersist();
   }
   if (reply && web) { reply.web = { query: web.query, sources: web.sources }; addSources(body.parentElement, reply.web); storePersist(); }
+  if (src === "grid") refreshCredit();
   if (reply && src === "grid") {
     addCheck(body.parentElement, c, reply);
     if (STORE.check) crossCheck(c, reply);
@@ -2622,7 +2624,7 @@ let IMG_RUNNING = false;
 async function imgGenerate() {
   if (IMG_RUNNING) return; // Ctrl+Enter while a picture is being made
   IMG_RUNNING = true;
-  try { await imgGenerateRun(); } finally { IMG_RUNNING = false; }
+  try { await imgGenerateRun(); } finally { refreshCredit(); IMG_RUNNING = false; }
 }
 async function imgGenerateRun() {
   await authFresh();
@@ -2890,6 +2892,11 @@ function fmtTime(d) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+// Time of day for "Updated …" stamps, same style: 13:38:59, local time.
+function fmtClock(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 // A payout covers one UTC hour ("hour-2026-11-16T08"): its start as a Date.
 function payAt(p) { return new Date(String(p.period_id || "").replace(/^hour-/, "") + ":00:00Z"); }
 
@@ -3080,6 +3087,12 @@ async function loadMWorkers() {
     $("#mw-stamp").textContent = e.message === "no-key" ? "" : "Could not load: " + emsg(e);
   }
 }
+// After a paid request the credit figure is read again. The grid books the
+// charge a moment after the answer, hence the short wait.
+function refreshCredit() {
+  if (!MOBILE || !apiKey()) return;
+  setTimeout(async () => { try { renderCredit(await api("/account/credits")); } catch (e) {} }, 2500);
+}
 // The small credit figure above the chat, and the account line in More.
 function renderCredit(c) {
   const chip = $("#chatcredit");
@@ -3172,7 +3185,7 @@ function renderNetwork(net, wk, jobs, totals) {
     $("#netfeed").innerHTML = jobs.slice(0, 15).map((j) => `<tr><td colspan="6"><div class="mline"><span>${esc(j.model)}</span><b>+${Number(j.den || 0).toFixed(2)} den</b></div>
       <div class="mline msub"><span>${esc(j.worker)}</span><span>${esc(timeAgo(j.created))} · ${esc(j.type)}${j.duration_s != null ? " · " + Number(j.duration_s).toFixed(1) + " s" : ""}</span></div></td></tr>`).join("")
       || '<tr><td colspan="6" class="muted">No recent jobs.</td></tr>';
-    $("#netstamp").textContent = "Updated " + new Date().toLocaleTimeString();
+    $("#netstamp").textContent = "Updated " + fmtClock(new Date());
     return;
   }
   if (!workers.length) { $("#netmap").innerHTML = '<p class="muted">No workers are online right now.</p>'; }
@@ -3217,7 +3230,7 @@ function renderNetwork(net, wk, jobs, totals) {
       <td>${esc(j.type)}</td><td>${j.duration_s != null ? Number(j.duration_s).toFixed(1) + " s" : "—"}</td>
       <td>+${Number(j.den || 0).toFixed(2)}</td></tr>`).join("")
     || '<tr><td colspan="6" class="muted">No recent jobs.</td></tr>';
-  $("#netstamp").textContent = "Updated " + new Date().toLocaleTimeString() + " · refreshes every 15 s";
+  $("#netstamp").textContent = "Updated " + fmtClock(new Date()) + " · refreshes every 15 s";
 }
 
 async function loadNetwork() {

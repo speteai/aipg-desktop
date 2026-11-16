@@ -44,6 +44,12 @@ jobs:
           f=$(find src-tauri/gen/android/app/src/main -name MainActivity.kt)
           echo "replacing $f"; cat "$f"
           cp src-tauri/android/MainActivity.kt "$f"
+      - name: Dark window and start screen (no white flash before the page is drawn)
+        run: |
+          for f in $(find src-tauri/gen/android/app/src/main/res -name themes.xml); do
+            sed -i 's|<!-- Customize your theme here. -->|<item name="android:windowBackground">#141311</item><item name="android:windowSplashScreenBackground" tools:targetApi="31">#141311</item>|' "$f"
+            echo "$f"; cat "$f"
+          done
       - name: Keep app data (API key, sign-in) out of device backups
         run: |
           m=src-tauri/gen/android/app/src/main/AndroidManifest.xml
