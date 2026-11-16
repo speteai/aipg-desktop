@@ -43,11 +43,11 @@ adb install "$APK"
 adb logcat -c
 adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1
 # the first seconds, several frames a second: is the start logo there?
-for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16; do
-  ( sleep "$(python3 -c "print(int('$n') * 0.35)")"; adb exec-out screencap -p > "out/00-start-$n.png" ) &
+for n in $(seq -w 1 36); do
+  ( sleep "$(python3 -c "print(int('$n') * 0.4)")"; adb exec-out screencap -p > "out/00-start-$n.png" ) &
 done
 wait
-sleep 25
+sleep 18
 tap_text "Wait" || true
 shot 01-welcome 2
 tap_text "Not now"; shot 02-start-chat
