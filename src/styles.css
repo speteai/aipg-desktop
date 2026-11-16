@@ -599,6 +599,48 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 }
 
 
+/* 16 · Phone (Android build) ==============================================
+   Set by main.js through html.mobile. The sidebar becomes a bottom bar with
+   five entries; everything that needs a desktop (.donly) is gone. */
+
+.monly{display:none}
+.mobile .donly{display:none !important}
+.mobile span.monly{display:inline}
+.mobile body{flex-direction:column}
+.mobile main{order:1;padding:var(--s4) var(--s4) var(--s5)}
+.mobile .side{order:2;width:auto;flex:none;flex-direction:row;align-items:stretch;gap:0;
+  padding:0;border:0;border-top:1px solid var(--bd);overflow:visible}
+.mobile .side .brand,.mobile .side .spacer,.mobile .side .conn,.mobile .nav.mmore{display:none}
+.mobile .nav,.mobile .nav.monly{display:flex;flex:1 1 0;min-width:0;min-height:56px;
+  flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  padding:6px 2px 8px;font-size:12px;white-space:nowrap;
+  border:0;border-top:2px solid transparent}
+.mobile .nav.active{border-top-color:var(--acc-fill)}
+.mobile .nav:hover{background:none}
+
+/* touch: bigger targets, and 16px inputs so the keyboard does not zoom the page */
+.mobile .btn{min-height:40px;padding-left:14px;padding-right:14px}
+.mobile input[type=text],.mobile input[type=password],.mobile textarea,.mobile select{font-size:16px}
+.mobile .field input[type=checkbox]{width:18px;height:18px;vertical-align:-3px;margin-right:6px}
+.mobile .vh{flex-wrap:wrap}
+
+/* chat: the option row scrolls sideways instead of stacking five lines high */
+.mobile .chatbar{flex-wrap:nowrap;overflow-x:auto;padding-bottom:var(--s2)}
+.mobile .chatbar > *{flex:0 0 auto}
+.mobile .chatbar .spacer{display:none}
+.mobile .chatlog{min-height:80px}
+
+.mobile .overlay{align-items:flex-start;overflow-y:auto;padding:var(--s4)}
+.mobile .toast{bottom:76px}
+
+.morelist{border-top:1px solid var(--bd)}
+.morerow{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;
+  background:none;border:0;border-bottom:1px solid var(--bd);
+  color:var(--fg);font:inherit;padding:14px 0;cursor:pointer}
+.morerow span{color:var(--mut);font-size:var(--t-small)}
+.morerow:active{background:var(--panel2)}
+
+
 /* 15 · Reduced motion ===================================================== */
 
 @media (prefers-reduced-motion:reduce){

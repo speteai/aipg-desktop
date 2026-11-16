@@ -12,6 +12,14 @@ const del = (k) => { try { localStorage.removeItem(k); } catch (e) {} };
 
 let POLL = null;
 
+/* ---------- phone build ---------- */
+// The Android app is the user and monitoring side only: no worker, no local
+// models, no connector. The class switches the layout (styles.css, section 16).
+const MOBILE = /Android/i.test(navigator.userAgent);
+if (MOBILE) document.documentElement.classList.add("mobile");
+const MORE_VIEWS = ["models", "network", "settings", "more"];
+const DESKTOP_VIEWS = ["worker", "connect"];
+
 /* ---------- theme ---------- */
 function applyTheme(t) {
   if (t) document.documentElement.setAttribute("data-theme", t);
@@ -2813,7 +2821,10 @@ async function checkNewModels() {
 
 /* ---------- views ---------- */
 function show(view) {
-  $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  if (MOBILE && DESKTOP_VIEWS.includes(view)) view = "overview";
+  // on a phone Models, Network and Settings sit behind "More" in the bottom bar
+  const tab = MOBILE && MORE_VIEWS.includes(view) ? "more" : view;
+  $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === tab));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   if (view === "overview") { loadOverview(); renderUsage(); }
   if (view === "chat") loadChat();
@@ -3118,6 +3129,7 @@ async function syncConnectorKey() {
 /* ---------- wire up ---------- */
 document.addEventListener("DOMContentLoaded", () => {
   $$(".nav").forEach((b) => (b.onclick = () => show(b.dataset.view)));
+  $$(".morerow").forEach((b) => (b.onclick = () => show(b.dataset.go)));
   $("#refresh").onclick = loadOverview;
   $("#refresh-models").onclick = loadModels;
   $("#refresh-earnings").onclick = loadEarnings;

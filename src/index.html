@@ -12,12 +12,13 @@
     <button class="nav active" data-view="overview"><span class="ni"></span> Overview</button>
     <button class="nav" data-view="chat"><span class="ni"></span> Chat</button>
     <button class="nav" data-view="images"><span class="ni"></span> Images</button>
-    <button class="nav" data-view="worker"><span class="ni"></span> Run a worker<span id="navjob" class="navjob" title="Serving a grid job"></span></button>
-    <button class="nav" data-view="models"><span class="ni"></span> Models</button>
-    <button class="nav" data-view="network"><span class="ni"></span> Network</button>
+    <button class="nav donly" data-view="worker"><span class="ni"></span> Run a worker<span id="navjob" class="navjob" title="Serving a grid job"></span></button>
+    <button class="nav mmore" data-view="models"><span class="ni"></span> Models</button>
+    <button class="nav mmore" data-view="network"><span class="ni"></span> Network</button>
     <button class="nav" data-view="earnings"><span class="ni"></span> Earnings</button>
-    <button class="nav" data-view="connect"><span class="ni"></span> Connect</button>
-    <button class="nav" data-view="settings"><span class="ni"></span> Settings</button>
+    <button class="nav donly" data-view="connect"><span class="ni"></span> Connect</button>
+    <button class="nav mmore" data-view="settings"><span class="ni"></span> Settings</button>
+    <button class="nav monly" data-view="more"><span class="ni"></span> More</button>
     <div class="spacer"></div>
     <div class="conn" id="conn"><span class="dot" id="conndot"></span><span id="connlabel">not connected</span></div>
   </nav>
@@ -55,16 +56,16 @@
         <span class="ovcells" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
         <span class="ovtext"><span id="ovwork-t" class="ovwork-t"></span><span id="ovwork-s" class="ovwork-s"></span></span>
       </button>
-      <div class="vh" style="margin-top:22px">
+      <div class="vh donly" style="margin-top:22px">
         <h2 class="sec" style="margin:0">Worker activity on this computer</h2>
         <span class="row" style="margin-left:auto">
           <button class="btn ghost usebtn" data-r="24h">24 hours</button>
           <button class="btn ghost usebtn" data-r="7d">7 days</button>
         </span>
       </div>
-      <div id="usechart" class="usechart"></div>
-      <div class="uselegend"><span><i class="k-on"></i>worker online</span><span><i class="k-busy"></i>serving grid jobs</span></div>
-      <p class="hint" id="usesum"></p>
+      <div id="usechart" class="usechart donly"></div>
+      <div class="uselegend donly"><span><i class="k-on"></i>worker online</span><span><i class="k-busy"></i>serving grid jobs</span></div>
+      <p class="hint donly" id="usesum"></p>
       <div class="vh" style="margin-top:22px">
         <h2 class="sec" style="margin:0">Your workers</h2>
         <span id="wtools" class="row"></span>
@@ -79,12 +80,12 @@
         <aside class="chatside">
           <button class="btn" id="chatnew">+ New chat</button>
           <div id="chatlist" class="chatlist"></div>
-          <p class="hint" style="margin-top:auto">Chats are stored locally on this machine.</p>
+          <p class="hint" style="margin-top:auto">Chats are stored locally on this device.</p>
         </aside>
         <div class="chatmain">
           <div class="chatbar">
-            <label class="seg"><input type="radio" name="chatsrc" value="grid" checked> Grid</label>
-            <label class="seg"><input type="radio" name="chatsrc" value="local"> Local</label>
+            <label class="seg donly"><input type="radio" name="chatsrc" value="grid" checked> Grid</label>
+            <label class="seg donly"><input type="radio" name="chatsrc" value="local"> Local</label>
             <select id="chatmodel" class="sel"></select>
             <span class="spacer"></span>
             <label class="seg" title="Only send the last N messages — saves grid cost">Context
@@ -99,9 +100,9 @@
             <label class="seg" title="Check every grid reply: a second model answers the same question and the two answers are compared. Costs two extra requests per reply. You can also check single replies with the link below them."><input type="checkbox" id="chatcheck"> Cross-check</label>
             <label class="seg" title="Council: every text model that is online answers the question on its own, then one of them writes a joint answer and says where the others agree or differ. One request per model plus one for the joint answer. Agreement is not proof: models can share the same mistake."><input type="checkbox" id="chatcouncil"> Council</label>
             <label class="seg" title="Search the web for each question and give the results to the model: recent news and Wikipedia, plus a general web search if you stored a search key in Settings. A web address in your message is read as well. The search runs on this computer; the search words go to the search services."><input type="checkbox" id="chatweb"> Web</label>
-            <label class="seg" title="This chat never leaves this computer: it can only use a local model"><input type="checkbox" id="chatlocal"> Local only</label>
+            <label class="seg donly" title="This chat never leaves this computer: it can only use a local model"><input type="checkbox" id="chatlocal"> Local only</label>
           </div>
-          <p class="hint" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
+          <p class="hint donly" id="chathint">Grid · <b>Auto</b> lets the grid pick the best model. Local runs on your own Ollama.</p>
           <div id="chatlog" class="chatlog"></div>
           <div id="chatatt" class="chatatt"></div>
           <div class="chatinput">
@@ -587,8 +588,8 @@
           <button class="btn ghost" id="acct-signout" style="display:none">Sign out</button>
         </div>
         <p class="hint">Opens the AIPG Console in your browser, where you approve this app; there is no key to copy.
-          Enough for chat, images, your credit and the connector. The app stays signed in for up to 180 days
-          (30 days without use). Running a worker needs an API key.</p>
+          Enough for chat, images and your credit<span class="donly"> and the connector</span>. The app stays signed in for up to 180 days
+          (30 days without use).<span class="donly"> Running a worker needs an API key.</span></p>
       </div>
       <div class="field">
         <label>Grid API key</label>
@@ -604,16 +605,16 @@
         <label><input type="checkbox" id="alerts"> Offline alerts (native notifications while the app is open)</label>
         <p class="hint">Notifies you when a worker goes offline, enters maintenance, or recovers. Checks every 2 minutes.</p>
       </div>
-      <div class="field" id="field-autostart">
+      <div class="field donly" id="field-autostart">
         <label><input type="checkbox" id="autostart"> Start the worker automatically when the app opens</label>
         <p class="hint">Starts Ollama and the last configured worker as soon as the app launches (needs an API key).
           A worker that crashes is restarted automatically, up to 3 times in 10 minutes.</p>
       </div>
-      <div class="field" id="field-loginstart">
+      <div class="field donly" id="field-loginstart">
         <label><input type="checkbox" id="loginstart"> Launch AIPG Desktop when I sign in to this computer</label>
         <p class="hint">Starts minimized in the tray. Combine with the option above to keep earning after a reboot.</p>
       </div>
-      <div class="field" id="field-closetray">
+      <div class="field donly" id="field-closetray">
         <label><input type="checkbox" id="closetray"> Minimize to tray when the window is closed</label>
         <p class="hint">Closing the window then keeps the app (and a running worker) alive in the background.
           Quit completely via right-click on the tray icon → “Quit”.</p>
@@ -632,7 +633,7 @@
           them by placeholders and puts the real values back into the answer, so the other computer never sees them.
           It only catches clearly shaped values, not confidential text in general — use a “Local only” chat for that.</p>
       </div>
-      <div class="field" id="field-quick">
+      <div class="field donly" id="field-quick">
         <label>Quick prompt shortcut</label>
         <div class="row">
           <select id="quickkey" class="sel">
@@ -644,7 +645,7 @@
         </div>
         <p class="hint" id="quickmsg">Opens a one-line prompt above all windows while the app is running. Enter sends it to a new chat.</p>
       </div>
-      <div class="field" id="field-update">
+      <div class="field donly" id="field-update">
         <label>Updates <span id="appver" class="muted"></span></label>
         <div class="row">
           <button class="btn" id="btn-update">Check for updates</button>
@@ -689,18 +690,27 @@
           <a href="#" data-ext="https://github.com/speteai/aipg-desktop">Source on GitHub</a></p>
       </div>
     </section>
+    <!-- MORE (phone only: the views that do not fit the bottom bar) -->
+    <section class="view" id="view-more">
+      <header class="vh"><h1>More</h1></header>
+      <div class="morelist">
+        <button class="morerow" data-go="models"><b>Models</b><span>The models on the grid and their prices</span></button>
+        <button class="morerow" data-go="network"><b>Network</b><span>Who serves what on the grid, live</span></button>
+        <button class="morerow" data-go="settings"><b>Settings</b><span>Account, API key, alerts, theme</span></button>
+      </div>
+    </section>
   </main>
 
   <div id="welcome" class="overlay" style="display:none">
     <div class="card welcomecard">
-      <div class="brand" style="padding:0 0 6px"><img src="aipg-logo.png" alt="" class="logo"> Welcome to AIPG Desktop</div>
+      <div class="brand" style="padding:0 0 6px"><img src="aipg-logo.png" alt="" class="logo"> Welcome to AIPG <span class="donly">Desktop</span><span class="monly">Mobile</span></div>
       <p class="muted">Connect the app to your AIPG account for chat, images and your credit.
         An account is free and takes a minute.</p>
       <div id="wc-signin-box" class="wcsignin">
         <button class="btn primary" id="wc-signin">Sign in with your browser</button>
         <p class="hint">The quickest way: approve this app in the AIPG Console, nothing to copy.</p>
       </div>
-      <p class="muted wcor">Or use an API key. You need one to run a worker:</p>
+      <p class="muted wcor">Or use an API key.<span class="donly"> You need one to run a worker:</span></p>
       <ol class="wcsteps">
         <li><b>Open the AIPG Console</b> and sign in, or create an account there.
           <div class="row"><button class="btn" id="wc-open" data-ext="https://console.aipowergrid.io/dashboard/api-key">Open the key page →</button></div></li>
@@ -709,13 +719,13 @@
         <li><b>Paste it here.</b>
           <div class="row"><input id="wc-key" type="password" placeholder="grid_…" autocomplete="off" spellcheck="false"></div></li>
       </ol>
-      <p class="hint" id="wc-msg">The key is stored on this computer only and sent only to api.aipowergrid.io.</p>
+      <p class="hint" id="wc-msg">The key is stored on this device only and sent only to api.aipowergrid.io.</p>
       <div class="row" style="margin-top:14px;justify-content:flex-end">
         <button class="btn ghost" id="wc-skip">Not now</button>
         <button class="btn primary" id="wc-save">Check &amp; save</button>
       </div>
-      <p class="hint">Without an account you can still look at the network and the model list, and chat with a
-        model on your own computer.</p>
+      <p class="hint">Without an account you can still look at the network and the model list<span class="donly">, and chat with a
+        model on your own computer</span>.</p>
     </div>
   </div>
 
