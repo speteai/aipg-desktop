@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
+#[cfg(desktop)]
 use tauri::menu::{MenuBuilder, MenuItem};
+#[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+#[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 mod account;
@@ -16,6 +19,7 @@ mod web;
 mod worker;
 use worker::Procs;
 
+#[cfg(desktop)]
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -28,13 +32,17 @@ fn show_main(app: &tauri::AppHandle) {
 /// have no tooltip, so this is a no-op there.
 #[tauri::command]
 fn tray_status(app: tauri::AppHandle, text: String) {
+    #[cfg(desktop)]
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(text));
     }
+    #[cfg(mobile)]
+    let _ = (app, text);
 }
 
 /* ---- quick prompt: a one-line window on a global shortcut ---- */
 
+#[cfg(desktop)]
 fn toggle_quick(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("quick") {
         if w.is_visible().unwrap_or(false) {
@@ -49,6 +57,9 @@ fn toggle_quick(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn quick_hide(app: tauri::AppHandle) {
+    #[cfg(mobile)]
+    let _ = app;
+    #[cfg(desktop)]
     if let Some(w) = app.get_webview_window("quick") {
         let _ = w.hide();
     }
@@ -59,11 +70,20 @@ fn quick_hide(app: tauri::AppHandle) {
 #[tauri::command]
 fn quick_submit(app: tauri::AppHandle, text: String) {
     quick_hide(app.clone());
+    #[cfg(desktop)]
     show_main(&app);
     let _ = app.emit_to("main", "quick-ask", text);
 }
 
+/// No global shortcuts on a phone.
+#[cfg(mobile)]
+#[tauri::command]
+fn quick_shortcut_set(_shortcut: String) -> Result<(), String> {
+    Ok(())
+}
+
 /// (Re)register the global shortcut for the quick prompt; empty = off.
+#[cfg(desktop)]
 #[tauri::command]
 fn quick_shortcut_set(app: tauri::AppHandle, shortcut: String) -> Result<(), String> {
     let gs = app.global_shortcut();
@@ -82,19 +102,72 @@ pub fn run_connector(key_file: String) {
     mcp::run_stdio(key_file.into());
 }
 
+/// Tray icon, quick prompt window and the start-minimized rule: the parts of
+/// the app that only exist on a desktop.
+#[cfg(desktop)]
+fn desktop_shell(app: &mut tauri::App, handle: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let show = MenuItem::with_id(handle, "show", "Open AIPG Desktop", true, None::<&str>)?;
+    let quit = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)?;
+    let menu = MenuBuilder::new(handle).item(&show).item(&quit).build()?;
+    let icon = app.default_window_icon().unwrap().clone();
+    let _ = TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .tooltip("AIPG Desktop")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main(tray.app_handle());
+            }
+        })
+        .build(handle)?;
+    // Quick prompt window, created hidden; the shortcut only shows it.
+    let _ = tauri::WebviewWindowBuilder::new(
+        handle,
+        "quick",
+        tauri::WebviewUrl::App("quick.html".into()),
+    )
+    .title("AIPG Quick prompt")
+    .inner_size(680.0, 64.0)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .center()
+    .build();
+    // Launched at login (autostart passes --minimized): stay in the tray.
+    let just_updated = worker::take_update_marker(handle);
+    if !just_updated && std::env::args().any(|a| a == "--minimized") {
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.hide();
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let procs = Arc::new(Procs::default());
 
-    tauri::Builder::default()
-        // Must be the first plugin: a second launch only brings the running
-        // window to the front instead of starting a second worker and Ollama.
+    let builder = tauri::Builder::default();
+    // Must be the first plugin: a second launch only brings the running
+    // window to the front instead of starting a second worker and Ollama.
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -108,7 +181,11 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
-        ))
+        ));
+    builder
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(procs.clone())
         .invoke_handler(tauri::generate_handler![
             worker::prereqs,
@@ -179,56 +256,14 @@ pub fn run() {
             worker::init_runtime(&handle);
             // nothing of ours may still be running from a crashed earlier run
             worker::sweep_orphans(&handle);
-            let show = MenuItem::with_id(&handle, "show", "Open AIPG Desktop", true, None::<&str>)?;
-            let quit = MenuItem::with_id(&handle, "quit", "Quit", true, None::<&str>)?;
-            let menu = MenuBuilder::new(&handle).item(&show).item(&quit).build()?;
-            let icon = app.default_window_icon().unwrap().clone();
-            let _ = TrayIconBuilder::with_id("main")
-                .icon(icon)
-                .tooltip("AIPG Desktop")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => show_main(app),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        show_main(tray.app_handle());
-                    }
-                })
-                .build(&handle)?;
-            // Quick prompt window, created hidden; the shortcut only shows it.
-            let _ = tauri::WebviewWindowBuilder::new(
-                &handle,
-                "quick",
-                tauri::WebviewUrl::App("quick.html".into()),
-            )
-            .title("AIPG Quick prompt")
-            .inner_size(680.0, 64.0)
-            .resizable(false)
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(false)
-            .center()
-            .build();
-            // Launched at login (autostart passes --minimized): stay in the tray.
-            let just_updated = worker::take_update_marker(&handle);
-            if !just_updated && std::env::args().any(|a| a == "--minimized") {
-                if let Some(w) = handle.get_webview_window("main") {
-                    let _ = w.hide();
-                }
-            }
+            #[cfg(desktop)]
+            desktop_shell(app, &handle)?;
             Ok(())
         })
         .on_window_event(|window, event| {
+            #[cfg(mobile)]
+            let _ = (window, event);
+            #[cfg(desktop)]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Default: hide to tray instead of quitting, so a running worker
                 // keeps earning. Disable via Settings → "close to tray".

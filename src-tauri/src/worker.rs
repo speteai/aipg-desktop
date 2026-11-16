@@ -1746,7 +1746,21 @@ pub async fn models_dir_set(
 
 /* ------------------------- self-update ------------------------- */
 
+/// The self-update is a desktop feature.
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn update_check() -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn update_install() -> Result<(), String> {
+    Err("Updates come as a new APK on this device.".into())
+}
+
 /// Returns the new version string when an update is available.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn update_check(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_updater::UpdaterExt;
@@ -1755,6 +1769,7 @@ pub async fn update_check(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 /// Download the signed update, stop child processes, install and restart.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn update_install(app: AppHandle, state: State<'_, Arc<Procs>>) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt;
