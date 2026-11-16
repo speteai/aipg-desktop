@@ -1,4 +1,4 @@
-package io.github.speteai.aipgdesktop
+package io.github.speteai.aipgmobile
 
 import android.graphics.Color
 import android.os.Bundle

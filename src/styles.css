@@ -747,6 +747,19 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 [hidden]{display:none !important}
 
 
+/* 18 · Reply actions and starter questions ================================= */
+
+.mtools{display:flex;gap:var(--s4);margin-top:var(--s2);white-space:normal}
+.chatstart{display:flex;flex-wrap:wrap;gap:var(--s2);margin:0 0 var(--s3)}
+.starter{background:none;border:1px solid var(--bd-strong);border-radius:var(--r);color:var(--fg);
+  font:inherit;font-size:var(--t-ui);text-align:left;padding:8px 12px;cursor:pointer;
+  transition:border-color var(--ease),color var(--ease)}
+.starter:hover{border-color:var(--acc);color:var(--acc)}
+.mobile .starter{flex:1 1 100%;padding:11px 12px}
+.mobile .mtools{gap:var(--s5)}
+.mobile .mtools .mcheck-go{padding:6px 0}
+
+
 /* 15 · Reduced motion ===================================================== */
 
 @media (prefers-reduced-motion:reduce){

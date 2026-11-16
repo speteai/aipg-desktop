@@ -1917,8 +1917,57 @@ function addMsg(role, text, model, att) {
   body.className = "mbody";
   if (role === "user") body.textContent = text; else setReply(body, text);
   el.appendChild(body);
+  const st = $("#chatstart"); if (st) st.style.display = "none";
   $("#chatlog").appendChild(el); $("#chatlog").scrollTop = 1e9;
   return body;
+}
+
+/* ---------- reply actions and starter questions ---------- */
+// Under a reply: copy it, and for the latest one ask again.
+function addActions(el, c, m) {
+  const old = el.querySelector(".mtools"); if (old) old.remove();
+  if (!m || m.role !== "assistant" || !m.content) return;
+  const box = document.createElement("div"); box.className = "mtools";
+  const btn = (label, cls, fn) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "mcheck-go " + cls; b.textContent = label; b.onclick = fn;
+    box.appendChild(b);
+  };
+  btn("Copy", "mcopy", () => copyText(m.content, "Reply copied"));
+  const i = c.msgs.indexOf(m), u = c.msgs[i - 1];
+  if (i === c.msgs.length - 1 && u && u.role === "user" && !u.files && !u.images) {
+    // only the latest reply can be asked again
+    $$("#chatlog .mregen").forEach((b) => b.remove());
+    btn("Ask again", "mregen", () => regenerate(c, m));
+  }
+  el.appendChild(box);
+}
+function regenerate(c, m) {
+  if (CHAT_BUSY) return;
+  const i = c.msgs.indexOf(m), u = c.msgs[i - 1];
+  if (i < 1 || i !== c.msgs.length - 1 || !u || u.role !== "user" || u.files || u.images) return;
+  c.msgs.splice(i - 1, 2);
+  renderMessages();
+  $("#chattext").value = u.content;
+  chatSend();
+}
+const STARTERS = [
+  "Explain how a GPU differs from a CPU, in simple words",
+  "Draft a short, polite e-mail declining a meeting",
+  "Give me three ideas for a weekend project with a Raspberry Pi",
+  "What can I ask you? Give me five useful examples",
+];
+// An empty chat offers a few questions to tap instead of a blank page.
+function renderStarters() {
+  const box = $("#chatstart"); if (!box) return;
+  const c = curChat();
+  const on = !!c && !c.msgs.length && !(CHAT_LIVE && CHAT_LIVE.id === c.id);
+  box.style.display = on ? "" : "none";
+  if (!on || box.childElementCount) return;
+  STARTERS.forEach((t) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "starter"; b.textContent = t;
+    b.onclick = () => { if (CHAT_BUSY) return; $("#chattext").value = t; chatSend(); };
+    box.appendChild(b);
+  });
 }
 
 function renderMessages() {
@@ -1926,10 +1975,12 @@ function renderMessages() {
   for (const m of c.msgs) {
     const body = addMsg(m.role === "user" ? "user" : "bot", m.show != null ? m.show : m.content, m.role !== "user" ? m.model : null, m);
     addCheck(body.parentElement, c, m);
+    addActions(body.parentElement, c, m);
     if (m.web) addSources(body.parentElement, m.web);
   }
   // the reply being written is not in the stored messages yet: keep its bubble on screen
   if (CHAT_LIVE && CHAT_LIVE.id === c.id) { $("#chatlog").appendChild(CHAT_LIVE.el); $("#chatlog").scrollTop = 1e9; }
+  renderStarters();
 }
 
 function loadCurrentChat() {
@@ -2471,6 +2522,7 @@ async function chatSendRun() {
       if (web) reply.web = { query: web.query, sources: web.sources };
       c.msgs.push(reply); c.updated = Date.now();
       addCouncil(body.parentElement, reply);
+      addActions(body.parentElement, c, reply);
       if (reply.web) addSources(body.parentElement, reply.web);
     } catch (e) {
       if (e.name === "AbortError") { body.textContent = "…[stopped]"; c.msgs.pop(); }
@@ -2517,6 +2569,13 @@ async function chatSendRun() {
     c.updated = Date.now();
   } catch (e) {
     if (e.name === "AbortError") { acc = shown(acc); setReply(body, acc + " …[stopped]"); c.msgs.push({ role: "assistant", content: acc, model: label }); }
+    else if (src === "grid" && model !== "auto" && /is not available/i.test(emsg(e))) {
+      // the chosen model went offline between loading the list and sending
+      body.textContent = `⚠ ${model} is offline on the grid right now. This chat now uses Auto, and your message is back in the box: send it again.`;
+      c.msgs.pop(); c.model = "auto";
+      ta.value = typed;
+      fillChatModels().then(() => { $("#chatmodel").value = "auto"; });
+    }
     else { body.textContent = "⚠ " + emsg(e); c.msgs.pop(); }
   } finally {
     $("#chatsend").style.display = ""; $("#chatstop").style.display = "none"; CHAT_ABORT = null;
@@ -2524,6 +2583,8 @@ async function chatSendRun() {
   }
   if (reply && web) { reply.web = { query: web.query, sources: web.sources }; addSources(body.parentElement, reply.web); storePersist(); }
   if (src === "grid") refreshCredit();
+  if (reply) addActions(body.parentElement, c, reply);
+  if (!reply) renderStarters();
   if (reply && src === "grid") {
     addCheck(body.parentElement, c, reply);
     if (STORE.check) crossCheck(c, reply);
@@ -3530,6 +3591,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // getting a key: shown on first run, and again from the Overview banner and Settings
   wireKeyGuide();
   wireAccount();
+  // which build this is, next to the feedback link: testers need it for reports
+  if (TAURI.app && TAURI.app.getVersion) {
+    TAURI.app.getVersion().then((v) => { $("#appver2").textContent = "Version " + v + (MOBILE ? " for Android (test build) ·" : " ·"); }).catch(() => {});
+  }
   $("#ovwork").onclick = () => show("worker");
   document.querySelectorAll(".usebtn").forEach((b) => (b.onclick = () => {
     USE_RANGE = b.dataset.r; set("aipg_usage_range", USE_RANGE); renderUsage();

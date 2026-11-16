@@ -3,7 +3,7 @@
 # installs the APK, opens the app, walks through the main views and saves a
 # screenshot of each, plus the log.
 set -x
-PKG=io.github.speteai.aipgdesktop
+PKG=io.github.speteai.aipgmobile
 mkdir -p out
 APK=$(find apk -name '*x86_64*.apk' | head -1)
 
