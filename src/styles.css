@@ -741,23 +741,27 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
   border-radius:var(--r);overflow-x:auto;white-space:pre;font:var(--t-small)/1.5 var(--mono)}
 .msg .md pre code{background:none;border:0;padding:0;font-size:inherit}
 .msg .md .mdtable{overflow-x:auto;margin:0 0 var(--s3);border-top:1px solid var(--bd-strong)}
-.msg .md table{width:auto;min-width:60%;font:var(--t-small)/1.45 var(--sans)}
-.msg .md th,.msg .md td{white-space:normal;vertical-align:top;padding-right:var(--s4)}
+/* a table is as wide as its content needs and scrolls sideways; words are never cut in the middle */
+.msg .md table{width:max-content;min-width:100%;font:var(--t-small)/1.45 var(--sans)}
+.msg .md th,.msg .md td{white-space:normal;word-break:normal;overflow-wrap:normal;hyphens:none;
+  min-width:7em;max-width:22em;vertical-align:top;padding-right:var(--s4)}
 .msg .md th{font:600 var(--t-small)/1.4 var(--sans);letter-spacing:0;text-transform:none;color:var(--fg)}
 [hidden]{display:none !important}
 
 
 /* 18 · Reply actions and starter questions ================================= */
 
-.mtools{display:flex;gap:var(--s4);margin-top:var(--s2);white-space:normal}
+.mtools{display:flex;gap:var(--s2);margin-top:var(--s3);white-space:normal}
+.mtools .mcheck-go{color:var(--fg);font-size:var(--t-ui);line-height:1.2;min-height:34px;padding:6px 12px;
+  border:1px solid var(--bd-strong);border-radius:var(--r);text-decoration:none}
+.mtools .mcheck-go:hover{border-color:var(--acc);color:var(--acc)}
 .chatstart{display:flex;flex-wrap:wrap;gap:var(--s2);margin:0 0 var(--s3)}
 .starter{background:none;border:1px solid var(--bd-strong);border-radius:var(--r);color:var(--fg);
   font:inherit;font-size:var(--t-ui);text-align:left;padding:8px 12px;cursor:pointer;
   transition:border-color var(--ease),color var(--ease)}
 .starter:hover{border-color:var(--acc);color:var(--acc)}
 .mobile .starter{flex:1 1 100%;padding:11px 12px}
-.mobile .mtools{gap:var(--s5)}
-.mobile .mtools .mcheck-go{padding:6px 0}
+.mobile .mtools .mcheck-go{min-height:42px;padding:8px 16px;font-size:var(--t-body)}
 
 
 /* 15 · Reduced motion ===================================================== */
