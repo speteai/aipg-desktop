@@ -49,6 +49,16 @@ jobs:
           m=src-tauri/gen/android/app/src/main/AndroidManifest.xml
           sed -i 's/<application/<application android:allowBackup="false"/' "$m"
           grep -n 'allowBackup' "$m"
+      - name: Use the fixed debug key (a new build then installs over the previous one)
+        env:
+          KS: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            mkdir -p ~/.android && echo "$KS" | base64 -d > ~/.android/debug.keystore
+            echo "fixed debug key in place"
+          else
+            echo "no fixed key available: this build gets a throwaway key"
+          fi
       - name: Build debug APKs (one per CPU type)
         env:
           # debug builds carry full debug symbols: about 210 MB per CPU type.
@@ -56,6 +66,12 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: '0'
           CARGO_PROFILE_DEV_STRIP: 'true'
         run: npm run tauri android build -- --debug --apk --split-per-abi --target aarch64 --target x86_64
+      - name: Show the signing certificate
+        run: |
+          S=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          for f in $(find src-tauri/gen/android/app/build/outputs -name '*.apk'); do
+            echo "$f"; "$S" verify --print-certs "$f" | grep -i 'SHA-256'
+          done
       - name: List outputs
         run: find src-tauri/gen/android/app/build/outputs -name '*.apk' -exec ls -la {} +
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

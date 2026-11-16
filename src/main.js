@@ -2920,11 +2920,7 @@ function show(view, fromHistory) {
   // on a phone Models, Network and Settings sit behind "More" in the bottom bar
   const tab = MOBILE && MORE_VIEWS.includes(view) ? "more" : view;
   if (view !== CUR_VIEW) {
-    if (MOBILE && !fromHistory) {
-      // every change of view is a history entry, so the back gesture walks
-      // back through the app before it leaves it
-      try { if (CUR_VIEW === null) history.replaceState({ view }, ""); else history.pushState({ view }, ""); } catch (e) {}
-    }
+    if (MOBILE && !fromHistory && !navGo(view)) return;
     const m = $("main"); if (m) m.scrollTop = 0;
     if (MOBILE && MTABS.includes(tab)) set("aipg_mtab", tab);
   }
@@ -2941,6 +2937,81 @@ function show(view, fromHistory) {
   if (view === "network") loadNetwork();
   if (view === "mworkers") loadMWorkers();
   if (view === "more") loadOverview();
+}
+
+/* phone: what the back gesture does. Android convention: switching tabs adds
+   no history; back leads once to the tab the app started on and then out of
+   the app. Only sub-pages (Models, Network, Settings) and sheets are entries
+   of their own. `d` in the history state is the depth below the start tab. */
+let HOME_TAB = null, NAV_PENDING = null;
+function navDepth() { return (history.state && history.state.d) || 0; }
+function navState(state, replace) { try { if (replace) history.replaceState(state, ""); else history.pushState(state, ""); } catch (e) {} }
+// Records a change of view. Returns false when the change is finished by the
+// popstate handler instead (after stepping back in the history).
+function navGo(view) {
+  const d = navDepth();
+  if (CUR_VIEW === null) { HOME_TAB = view; navState({ view, d: 0 }, true); return true; }
+  if (!MTABS.includes(view)) { navState({ view, d: d + 1 }); return true; }
+  if (view === HOME_TAB) {
+    if (d > 0) { history.go(-d); return false; }
+    return true;
+  }
+  if (d === 0) navState({ view, d: 1 });
+  else if (d === 1) navState({ view, d: 1 }, true);
+  else { NAV_PENDING = view; history.go(-(d - 1)); return false; }
+  return true;
+}
+function openSheet(id) {
+  $(id).style.display = "";
+  navState({ view: CUR_VIEW, d: navDepth() + 1, sheet: true });
+}
+function hideSheets() { ["#optsheet", "#picksheet"].forEach((id) => { const el = $(id); if (el) el.style.display = "none"; }); }
+
+/* phone: a model choice as a button that opens a list, instead of the small
+   system drop-down. The <select> stays the source of truth and keeps its
+   handlers; it is only hidden. */
+function pickParts(o) {
+  if (o.value === "auto") return { name: "Auto", note: "the grid picks the model · recommended" };
+  const t = String(o.textContent || "").split(" · ");
+  let name = t[0].trim(), note = t.slice(1).join(" · ");
+  if (name.endsWith("★")) { name = name.slice(0, -1).trim(); note = "fastest right now" + (note ? " · " + note : ""); }
+  return { name, note };
+}
+function wirePicker(sel, title) {
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "pickbtn";
+  sel.insertAdjacentElement("afterend", btn);
+  sel.classList.add("picked");
+  const sync = () => {
+    const o = sel.options[sel.selectedIndex], p = o ? pickParts(o) : { name: "—", note: "" };
+    btn.innerHTML = `<span class="pk">${esc(title)}</span><span class="pv">${esc(p.name)}</span>` +
+      (p.note ? `<span class="pn">${esc(p.note)}</span>` : "") + '<span class="pc" aria-hidden="true"></span>';
+  };
+  // the app also sets the value from code, which fires no event
+  const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+  Object.defineProperty(sel, "value", {
+    configurable: true,
+    get() { return desc.get.call(this); },
+    set(v) { desc.set.call(this, v); sync(); },
+  });
+  sel.addEventListener("change", sync);
+  new MutationObserver(sync).observe(sel, { childList: true });
+  btn.onclick = () => {
+    $("#picktitle").textContent = title;
+    const list = $("#picklist");
+    list.innerHTML = [...sel.options].map((o, i) => {
+      const p = pickParts(o);
+      return `<button type="button" class="pickrow${i === sel.selectedIndex ? " on" : ""}" data-i="${i}"><span class="pr-name">${esc(p.name)}</span>` +
+        (p.note ? `<span class="pr-note">${esc(p.note)}</span>` : "") + "</button>";
+    }).join("");
+    list.querySelectorAll(".pickrow").forEach((b) => (b.onclick = () => {
+      const o = sel.options[Number(b.dataset.i)];
+      if (o && sel.value !== o.value) { sel.value = o.value; sel.dispatchEvent(new Event("change", { bubbles: true })); }
+      history.back();
+    }));
+    openSheet("#picksheet");
+  };
+  sync();
 }
 
 /* ---------- phone: Workers tab (worker list and earnings in one place) ---------- */
@@ -2985,6 +3056,7 @@ function renderMWorkers() {
       <div class="mline msub"><span>${esc(jobWhen(j))} · ${esc(j.type || "")}</span><span>${esc(j.output_units ?? "—")} units${j.duration_s != null ? " · " + esc(j.duration_s) + " s" : ""}</span></div></div>`).join("")
     || '<p class="muted">No jobs yet.</p>';
   $("#mw-jobsbox").style.display = "";
+  $("#mw-payh").style.display = "";
 }
 async function loadMWorkers() {
   if (!apiKey() && SIGNED_IN && Date.now() - AUTH_AT > 15000) await refreshAuth();
@@ -2992,6 +3064,7 @@ async function loadMWorkers() {
     MW_DATA = null;
     $("#mw-stats").innerHTML = "";
     $("#mw-list").innerHTML = '<p class="muted">Sign in or add an API key under More → Settings to see your workers and what they earned.</p>';
+    $("#mw-payh").style.display = "none";
     $("#mw-wallet").innerHTML = ""; $("#mw-pay").innerHTML = ""; $("#mw-jobs").innerHTML = "";
     $("#mw-jobsbox").style.display = "none"; $("#mw-stamp").textContent = "";
     return;
@@ -3029,10 +3102,11 @@ function wireOptSheet() {
     l.removeAttribute("title");
     row.appendChild(l); row.appendChild(hint); list.appendChild(row);
   });
-  $("#chatopts").onclick = () => {
-    $("#optsheet").style.display = "";
-    try { history.pushState({ view: CUR_VIEW, sheet: true }, ""); } catch (e) {}
-  };
+  $("#chatopts").onclick = () => openSheet("#optsheet");
+  $("#pickclose").onclick = () => history.back();
+  $("#picksheet").addEventListener("click", (e) => { if (e.target.id === "picksheet") history.back(); });
+  wirePicker($("#chatmodel"), "Model");
+  wirePicker($("#imgmodel"), "Image model");
   $("#optclose").onclick = () => history.back();
   $("#optsheet").addEventListener("click", (e) => { if (e.target.id === "optsheet") history.back(); });
 }
@@ -3357,10 +3431,19 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#chatcredit").onclick = () => show("more");
     wireOptSheet();
     window.addEventListener("popstate", (e) => {
-      $("#optsheet").style.display = "none";
+      hideSheets();
+      if (NAV_PENDING) {            // a tab was tapped from a sub-page: we are back at depth 1 now
+        const t = NAV_PENDING; NAV_PENDING = null;
+        navState({ view: t, d: 1 }, true);
+        show(t, true);
+        return;
+      }
       const v = e.state && e.state.view;
-      if (v) show(v, true);
+      if (v && v !== CUR_VIEW) show(v, true);
     });
+    // start logo: stays for a moment, then fades out
+    const sp = $("#splash");
+    if (sp) setTimeout(() => { sp.classList.add("gone"); setTimeout(() => { sp.style.display = "none"; }, 450); }, 1300);
     // While the keyboard is up the page is much shorter: give the bottom bar's
     // room to the page. Measured by height, not by focus, because closing the
     // keyboard with the back gesture leaves the focus in the text field.

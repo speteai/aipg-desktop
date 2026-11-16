@@ -7,19 +7,20 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div id="splash" class="splash" aria-hidden="true"><img src="aipg-logo.png" alt=""></div>
   <nav class="side">
     <div class="brand"><img src="aipg-logo.png" alt="" class="logo"><span>AIPG <small>Desktop</small></span></div>
     <button class="nav active dnav" data-view="overview"><span class="ni"></span> Overview</button>
-    <button class="nav" data-view="chat"><span class="ni"></span> Chat</button>
-    <button class="nav" data-view="images"><span class="ni"></span> Images</button>
+    <button class="nav" data-view="chat"><span class="ni"></span><svg class="nico" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9.5L5 19.5V16H4z"/></svg> Chat</button>
+    <button class="nav" data-view="images"><span class="ni"></span><svg class="nico" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17.5l5-4.5 4 3.5 3-2.5 4.5 4"/></svg> Images</button>
     <button class="nav donly" data-view="worker"><span class="ni"></span> Run a worker<span id="navjob" class="navjob" title="Serving a grid job"></span></button>
     <button class="nav mmore" data-view="models"><span class="ni"></span> Models</button>
     <button class="nav mmore" data-view="network"><span class="ni"></span> Network</button>
     <button class="nav dnav" data-view="earnings"><span class="ni"></span> Earnings</button>
     <button class="nav donly" data-view="connect"><span class="ni"></span> Connect</button>
     <button class="nav mmore" data-view="settings"><span class="ni"></span> Settings</button>
-    <button class="nav monly" data-view="mworkers"><span class="ni"></span> Workers</button>
-    <button class="nav monly" data-view="more"><span class="ni"></span> More</button>
+    <button class="nav monly" data-view="mworkers"><span class="ni"></span><svg class="nico" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1"/><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"/></svg> Workers</button>
+    <button class="nav monly" data-view="more"><span class="ni"></span><svg class="nico" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor" stroke="none"><circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.5" cy="12" r="1.5"/></svg> More</button>
     <div class="spacer"></div>
     <div class="conn" id="conn"><span class="dot" id="conndot"></span><span id="connlabel">not connected</span></div>
   </nav>
@@ -701,7 +702,7 @@
       <header class="vh"><h1>Workers</h1><button class="btn" id="refresh-mw">Refresh</button></header>
       <div class="stats" id="mw-stats"></div>
       <div id="mw-list" class="mlist"><p class="muted">—</p></div>
-      <h2 class="sec">Payouts</h2>
+      <h2 class="sec" id="mw-payh">Payouts</h2>
       <p class="hint" id="mw-wallet"></p>
       <div id="mw-pay" class="mlist"></div>
       <details class="adv" id="mw-jobsbox"><summary>Recent jobs</summary><div id="mw-jobs" class="mlist"></div></details>
@@ -753,6 +754,13 @@
     <div class="sheetcard">
       <div class="vh"><h2 class="sec" style="margin:0">Chat options</h2><button class="btn" id="optclose">Done</button></div>
       <div id="optlist"></div>
+    </div>
+  </div>
+
+  <div id="picksheet" class="overlay sheet" style="display:none">
+    <div class="sheetcard">
+      <div class="vh"><h2 class="sec" id="picktitle" style="margin:0"></h2><button class="btn" id="pickclose">Close</button></div>
+      <div id="picklist"></div>
     </div>
   </div>
 
