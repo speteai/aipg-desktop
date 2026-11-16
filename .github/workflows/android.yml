@@ -101,7 +101,7 @@ jobs:
           arch: x86_64
           target: default
           profile: pixel_6
-          disable-animations: true
+          disable-animations: false   # the start logo pulses only when animations are on
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: bash scripts/android-smoke.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
