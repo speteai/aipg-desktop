@@ -2290,7 +2290,7 @@ async function privacyGate(chatId, texts) {
   const choice = await askChoice(
     `This message goes to a computer run by someone else on the grid, and it contains: ${Privacy.summary(hits)}.\n\n` +
     "Mask: the values are replaced by placeholders before sending and put back into the answer, so the other computer never sees them.\n" +
-    "Send as typed: the values leave this computer in plain text.",
+    "Send as typed: the values leave this device in plain text.",
     "Private data in this message",
     [{ label: "Cancel", value: "cancel" }, { label: "Send as typed", value: "raw" }, { label: "Mask and send", value: "mask", primary: true }]);
   if (choice === "raw") { hits.forEach((h) => ack.add(h.value)); return Privacy.makeMask(ack); }
@@ -2730,7 +2730,7 @@ async function renderGallery() {
   let list = [];
   try { list = await invoke("images_index"); } catch (e) {}
   $("#imgcountlabel").textContent = list.length ? `${list.length} image${list.length === 1 ? "" : "s"} · stored locally` : "";
-  if (!list.length) { box.innerHTML = '<p class="muted">Nothing here yet — your generated images are kept on this machine.</p>'; return; }
+  if (!list.length) { box.innerHTML = '<p class="muted">Nothing here yet — your generated images are kept on this device.</p>'; return; }
   box.innerHTML = "";
   if (GALLERY_SHOWN < 60) GALLERY_SHOWN = 60;
   if (list.length > GALLERY_SHOWN) {
@@ -2783,6 +2783,7 @@ function wireImages() {
   $("#imgfile").onchange = async () => { const f = $("#imgfile").files[0]; if (f) setImgSource(await fileToDataURL(f)); };
   $("#imggen").onclick = imgGenerate;
   $("#imgcancel").onclick = () => { if (IMG_ABORT) IMG_ABORT.abort(); };
+  if (MOBILE) $("#imgprompt").placeholder = "Describe the image…";
   $("#imgprompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); imgGenerate(); } });
   // keep the prompt box at the height the user dragged it to
   const ip = $("#imgprompt");
@@ -3133,11 +3134,15 @@ document.addEventListener("DOMContentLoaded", () => {
   $$(".nav").forEach((b) => (b.onclick = () => show(b.dataset.view)));
   $$(".morerow").forEach((b) => (b.onclick = () => show(b.dataset.go)));
   if (MOBILE) {
-    // while a text field has the focus the keyboard is up: give its room to the page
-    const typing = (el) => el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && !/checkbox|radio|file|button/.test(el.type)));
-    const root = document.documentElement;
-    document.addEventListener("focusin", (e) => root.classList.toggle("typing", !!typing(e.target)));
-    document.addEventListener("focusout", () => root.classList.toggle("typing", false));
+    // While the keyboard is up the page is much shorter: give the bottom bar's
+    // room to the page. Measured by height, not by focus, because closing the
+    // keyboard with the back gesture leaves the focus in the text field.
+    let tallest = window.innerHeight;
+    const fit = () => {
+      tallest = Math.max(tallest, window.innerHeight);
+      document.documentElement.classList.toggle("typing", window.innerHeight < tallest - 150);
+    };
+    window.addEventListener("resize", fit);
   }
   $("#refresh").onclick = loadOverview;
   $("#refresh-models").onclick = loadModels;
@@ -3329,7 +3334,7 @@ async function checkKey(k) {
 function keyGuideMsg(text, cls) { const m = $("#wc-msg"); m.textContent = text; m.className = "hint" + (cls ? " " + cls : ""); }
 function openKeyGuide() {
   $("#wc-key").value = "";
-  keyGuideMsg("The key is stored on this computer only and sent only to api.aipowergrid.io.");
+  keyGuideMsg("The key is stored on this device only and sent only to api.aipowergrid.io.");
   $("#wc-save").textContent = "Check & save"; $("#wc-save").disabled = false;
   $("#welcome").style.display = "";
   setTimeout(() => $("#wc-key").focus(), 50);
