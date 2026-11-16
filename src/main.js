@@ -2984,7 +2984,7 @@ function wirePicker(sel, title) {
   sel.classList.add("picked");
   const sync = () => {
     const o = sel.options[sel.selectedIndex], p = o ? pickParts(o) : { name: "—", note: "" };
-    btn.innerHTML = `<span class="pk">${esc(title)}</span><span class="pv">${esc(p.name)}</span>` +
+    btn.innerHTML = `<span class="pk">${esc(title)}</span> <span class="pv">${esc(p.name)}</span> ` +
       (p.note ? `<span class="pn">${esc(p.note)}</span>` : "") + '<span class="pc" aria-hidden="true"></span>';
   };
   // the app also sets the value from code, which fires no event
@@ -3001,7 +3001,7 @@ function wirePicker(sel, title) {
     const list = $("#picklist");
     list.innerHTML = [...sel.options].map((o, i) => {
       const p = pickParts(o);
-      return `<button type="button" class="pickrow${i === sel.selectedIndex ? " on" : ""}" data-i="${i}"><span class="pr-name">${esc(p.name)}</span>` +
+      return `<button type="button" class="pickrow${i === sel.selectedIndex ? " on" : ""}" data-i="${i}"><span class="pr-name">${esc(p.name)}</span> ` +
         (p.note ? `<span class="pr-note">${esc(p.note)}</span>` : "") + "</button>";
     }).join("");
     list.querySelectorAll(".pickrow").forEach((b) => (b.onclick = () => {
