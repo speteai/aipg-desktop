@@ -21,7 +21,8 @@ try:
 except Exception:
     sys.exit(0)
 for n in root.iter("node"):
-    if (n.get("text") or "").strip() == want or (n.get("content-desc") or "").strip() == want:
+    t = (n.get("text") or n.get("content-desc") or "").strip()
+    if t == want or (want.endswith("*") and t.startswith(want[:-1])):
         a = list(map(int, re.findall(r"\d+", n.get("bounds"))))
         print((a[0] + a[2]) // 2, (a[1] + a[3]) // 2)
         break
@@ -44,10 +45,11 @@ adb shell input tap 540 2000; shot 04-chat-keyboard 5
 adb shell input keyevent KEYCODE_BACK; sleep 2
 tap_text "Images"; shot 05-images
 tap_text "Earnings"; shot 06-earnings
-tap_text "More"; shot 07-more
-tap_text "Network"; shot 08-network 8
-tap_text "More"; tap_text "Settings"; shot 09-settings
-tap_text "More"; tap_text "Models"; shot 10-models 6
+tap_text "More"; shot 07-more 2
+tap_text "Network *"; shot 08-network 8
+tap_text "More"; sleep 2; tap_text "Settings *"; shot 09-settings
+adb shell input swipe 540 1800 540 600 300; shot 09b-settings-lower 2
+tap_text "More"; sleep 2; tap_text "Models *"; shot 10-models 6
 
 adb shell pidof $PKG > out/pid.txt || echo "NOT RUNNING" > out/pid.txt
 adb shell wm size > out/size.txt

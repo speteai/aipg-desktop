@@ -2554,7 +2554,9 @@ function wireChat() {
     if (fs && fs.length) { e.preventDefault(); attachFiles(fs); }
   });
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; });
-  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend(); } });
+  // on a phone Enter is a line break; the Send button sends
+  if (MOBILE) ta.placeholder = "Message…";
+  ta.addEventListener("keydown", (e) => { if (!MOBILE && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend(); } });
 }
 
 async function loadChat() {
@@ -3130,6 +3132,13 @@ async function syncConnectorKey() {
 document.addEventListener("DOMContentLoaded", () => {
   $$(".nav").forEach((b) => (b.onclick = () => show(b.dataset.view)));
   $$(".morerow").forEach((b) => (b.onclick = () => show(b.dataset.go)));
+  if (MOBILE) {
+    // while a text field has the focus the keyboard is up: give its room to the page
+    const typing = (el) => el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && !/checkbox|radio|file|button/.test(el.type)));
+    const root = document.documentElement;
+    document.addEventListener("focusin", (e) => root.classList.toggle("typing", !!typing(e.target)));
+    document.addEventListener("focusout", () => root.classList.toggle("typing", false));
+  }
   $("#refresh").onclick = loadOverview;
   $("#refresh-models").onclick = loadModels;
   $("#refresh-earnings").onclick = loadEarnings;
