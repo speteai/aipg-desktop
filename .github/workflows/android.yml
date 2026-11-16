@@ -44,6 +44,11 @@ jobs:
           f=$(find src-tauri/gen/android/app/src/main -name MainActivity.kt)
           echo "replacing $f"; cat "$f"
           cp src-tauri/android/MainActivity.kt "$f"
+      - name: Keep app data (API key, sign-in) out of device backups
+        run: |
+          m=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          sed -i 's/<application/<application android:allowBackup="false"/' "$m"
+          grep -n 'allowBackup' "$m"
       - name: Build debug APKs (one per CPU type)
         env:
           # debug builds carry full debug symbols: about 210 MB per CPU type.
