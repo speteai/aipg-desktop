@@ -655,6 +655,7 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .gcard.vcard .vthumb::after{content:"";position:absolute;left:50%;top:50%;margin:-11px 0 0 -7px;
   border-style:solid;border-width:11px 0 11px 18px;border-color:transparent transparent transparent #fff;
   filter:drop-shadow(0 0 3px rgba(0,0,0,.7))}
+#vidprice.short{color:var(--warn)}
 .vidjobs{display:flex;flex-direction:column;gap:var(--s1);margin-top:var(--s3)}
 .vidjobs:empty{display:none}
 .vidjob{display:flex;gap:var(--s3);align-items:baseline;font-size:12.5px}

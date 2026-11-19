@@ -53,6 +53,9 @@ Chat works right away — running a worker is optional and needs an API key.
   picture, on the grid's video model. Length and format are chosen before the start and
   the price is shown first (billed per second of video). A started clip is fetched even
   if you close the app, and is kept and played in a local gallery next to your images.
+  "Animate" on a picture in the Images gallery starts a clip from it; "Improve prompt"
+  has a text model on the grid turn a short idea into a full description (one small
+  text request); your credit is shown next to the price.
 - **Run a worker** — one click turns your machine into a grid worker and starts earning:
   - downloads the **official** `grid-inference-worker` binary and checks it against a
     SHA-256 that is fixed in this app's source code,
@@ -110,7 +113,7 @@ Chat works right away — running a worker is optional and needs an API key.
   structure view, not a geographic map.)
 - **Connect** — a local **MCP connector** lets assistants on the same computer (Claude
   Desktop, Claude Code, Cursor, …) offload work to the grid: run a text task, generate
-  images, list models, check your credit. One click registers it with Claude Desktop.
+  images and video clips (`grid_video`), list models, check your credit. One click registers it with Claude Desktop.
   It runs on your machine (`aipg-desktop --mcp`), so hosted clients such as ChatGPT or
   claude.ai in the browser cannot use it. After an app update, restart the assistant
   program so it loads new or changed tools.

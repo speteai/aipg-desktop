@@ -7,6 +7,10 @@
 const VID_JOBS_KEY = "aipg_video_jobs";
 const VID_FPS = 24;
 let VID_WIRED = false, VID_SOURCE = "", VID_TIMER = null, VID_BUSY = false, VID_RATES = {}, VID_PLAY_URL = "";
+let VID_CREDIT = null, VID_TICK = null, VID_HELP_PREV = null, VID_HELPING = false;
+const VID_POSTER_TRIED = new Set();
+const VID_HELP_SYS = "You write prompts for a text-to-video model that also generates sound. Rewrite the user's idea as one flowing paragraph of 60 to 110 words in English: the subject and what it does, in order; the setting; how the camera moves; light and colours; what is heard. Concrete and visual, present tense. No lists, no title, no quotation marks, no explanations. Keep everything the user specified and invent only fitting detail. Answer with the paragraph only.";
+const VID_HELP_PIC = "The clip starts from a picture the user supplies, which you cannot see: describe mainly the motion, the camera and the sound, and do not invent details of how the scene looks.";
 
 function vidJobs() { try { const l = JSON.parse(get(VID_JOBS_KEY) || "[]"); return Array.isArray(l) ? l : []; } catch (e) { return []; } }
 function vidJobsSave(list) { set(VID_JOBS_KEY, JSON.stringify(list)); }
@@ -48,8 +52,25 @@ function vidCost() {
   return rate ? rate * vidSeconds(frames) : null;
 }
 function vidPaintPrice() {
-  const c = vidCost();
-  $("#vidprice").textContent = c == null ? "" : `about $${c.toFixed(2)} per clip`;
+  const c = vidCost(), el = $("#vidprice");
+  const short = c != null && VID_CREDIT != null && VID_CREDIT < c;
+  el.textContent = c == null ? "" : `about $${c.toFixed(2)} per clip` +
+    (VID_CREDIT == null ? "" : ` · credit $${VID_CREDIT.toFixed(2)}` + (short ? " — not enough for this clip" : ""));
+  el.classList.toggle("short", short);
+}
+/* what the account can spend right now, shown next to the price */
+async function vidLoadCredit() {
+  let v = null;
+  try {
+    await authFresh();
+    const key = apiKey();
+    if (key) {
+      const r = await fetch(API + "/account/credits", { headers: { "Accept": "application/json", "Authorization": "Bearer " + key } });
+      if (r.ok) { const n = Number((await r.json()).total_spendable_usd); if (isFinite(n)) v = n; }
+    }
+  } catch (e) {}
+  VID_CREDIT = v;
+  vidPaintPrice();
 }
 
 async function fillVidModels() {
@@ -184,7 +205,7 @@ async function vidCheck() {
         const entry = await invoke("image_store", { src: url, meta });
         vidJobDrop(j.key); changed = true; stored = true;
         toast("Video ready");
-        vidMakePoster(entry.id);
+        VID_POSTER_TRIED.add(entry.id); vidMakePoster(entry.id);
       } catch (e) {
         const tries = (j.tries || 0) + 1;
         vidJobPatch(j.key, { tries, err: emsg(e), hold: tries >= 5 });
@@ -199,6 +220,7 @@ async function vidCheck() {
   }
   if (changed) renderVidJobs();
   if (stored) renderVidGallery();
+  if (changed && vidJobs().length < list.length) vidLoadCredit();
 }
 
 /* keep checking while jobs are open; stops by itself when the list is empty */
@@ -221,15 +243,33 @@ function vidStateText(j) {
   if (s === "completed") return "fetching";
   return j.job ? "started" : "sending";
 }
+function vidElapsed(j) {
+  const s = Math.max(0, Math.round((Date.now() - (j.t || 0)) / 1000));
+  return s < 120 ? `${s} s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min`;
+}
+function vidRowText(j) {
+  return `${vidStateText(j)} · ${vidSeconds(j.frames).toFixed(0)} s clip` + (j.hold ? "" : ` · ${vidElapsed(j)}`);
+}
+/* the running time of open jobs counts up without redrawing the rows */
+function vidTickStart() {
+  if (VID_TICK) return;
+  VID_TICK = setInterval(() => {
+    const open = vidJobs().filter((j) => !j.hold);
+    if (!open.length) { clearInterval(VID_TICK); VID_TICK = null; return; }
+    for (const j of open) {
+      const st = document.getElementById("vj-" + j.key);
+      if (st) st.textContent = vidRowText(j);
+    }
+  }, 1000);
+}
 function renderVidJobs() {
   navWorking("video", vidJobs().some((j) => !j.hold));
   const box = $("#vidjobs"); if (!box) return;
   box.innerHTML = "";
   for (const j of vidJobs()) {
     const row = document.createElement("div"); row.className = "vidjob";
-    const st = document.createElement("span"); st.className = "st";
-    const mins = Math.max(0, Math.round((Date.now() - (j.t || 0)) / 60000));
-    st.textContent = `${vidStateText(j)} · ${vidSeconds(j.frames).toFixed(0)} s clip` + (mins >= 2 ? ` · ${mins} min` : "");
+    const st = document.createElement("span"); st.className = "st"; st.id = "vj-" + j.key;
+    st.textContent = vidRowText(j);
     const pr = document.createElement("span"); pr.className = "pr"; pr.textContent = j.prompt || ""; pr.title = j.err || j.prompt || "";
     row.appendChild(st); row.appendChild(pr);
     if (j.hold) {
@@ -244,6 +284,70 @@ function renderVidJobs() {
     }
     box.appendChild(row);
   }
+  if (vidJobs().some((j) => !j.hold)) vidTickStart();
+}
+
+/* settings of an earlier clip back into the form */
+function vidReuse(it) {
+  const pick = (sel, v) => { const s = $(sel); if (v != null && [...s.options].some((o) => o.value === String(v))) s.value = String(v); };
+  $("#vidprompt").value = it.prompt || "";
+  pick("#vidmodel", it.model); pick("#vidlen", it.frames); pick("#vidsize", it.size);
+  vidPaintPrice();
+  $("#vidprompt").focus(); $("#vidprompt").scrollIntoView({ block: "center" });
+}
+/* a picture from the gallery becomes the first frame of a new clip */
+async function vidFromImage(it) {
+  const data = await galleryData(it.id);
+  if (!data) { toast("Could not load the picture"); return; }
+  show("video");
+  $("#vidusesrc").checked = true; $("#vidsrcrow").style.display = "";
+  setVidSource(data);
+  // the format closest to the picture's shape
+  const m = /^(\d+)x(\d+)$/.exec(it.size || "");
+  if (m) { const r = Number(m[1]) / Number(m[2]); $("#vidsize").value = r > 1.15 ? "960x544" : r < 0.87 ? "544x960" : "704x704"; }
+  if (!$("#vidprompt").value.trim()) $("#vidprompt").value = it.prompt || "";
+  $("#vidprompt").focus(); $("#vidprompt").scrollIntoView({ block: "center" });
+  toast("Picture set as the start of the clip. Describe how it should move.");
+}
+
+/* prompt help: a text model on the grid turns a short idea into a full description */
+function vidHelpClean(text) {
+  let t = String(text || "").replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const cut = t.lastIndexOf("</think>"); if (cut >= 0) t = t.slice(cut + 8);
+  t = t.replace(/^\s*(prompt|video prompt|rewritten prompt)\s*:\s*/i, "").replace(/\s*\n+\s*/g, " ").trim();
+  t = t.replace(/^["“”'`*]+|["“”'`*]+$/g, "").trim();
+  return t;
+}
+async function vidHelp() {
+  if (VID_HELPING) return;
+  const box = $("#vidprompt"), msg = $("#vidmsg"), idea = box.value.trim();
+  if (!idea) { toast("Write a few words about the clip first"); return; }
+  await authFresh();
+  if (!apiKey()) return needConnection();
+  if (protectMode() !== "off") {
+    const hits = Privacy.find(idea);
+    if (hits.length && !(await askConfirm(
+      `The text contains: ${Privacy.summary(hits)}.\n\nIt goes to someone else's computer in plain text. Send it anyway?`,
+      "Private data in the prompt"))) return;
+  }
+  VID_HELPING = true; $("#vidhelp").disabled = true;
+  msg.textContent = "Writing a fuller description…";
+  try {
+    const sys = VID_HELP_SYS + ($("#vidusesrc").checked ? " " + VID_HELP_PIC : "");
+    const a = await askOnce("grid", "auto", [{ role: "system", content: sys }, { role: "user", content: idea }], 1024);
+    const better = vidHelpClean(a.text);
+    if (better.length < 40) throw new Error("the model returned no usable text");
+    if (box.value.trim() !== idea) { msg.textContent = "The prompt was changed meanwhile; the suggestion was dropped."; return; }
+    VID_HELP_PREV = idea;
+    box.value = better;
+    $("#vidundo").style.display = "";
+    msg.textContent = `Rewritten by ${a.model}. Edit it as you like, or undo.`;
+  } catch (e) { msg.textContent = "⚠ No suggestion: " + emsg(e); }
+  finally { VID_HELPING = false; $("#vidhelp").disabled = false; }
+}
+function vidHelpUndo() {
+  if (VID_HELP_PREV != null) $("#vidprompt").value = VID_HELP_PREV;
+  VID_HELP_PREV = null; $("#vidundo").style.display = "none"; $("#vidmsg").textContent = "";
 }
 
 /* the stored clip as an object URL the page may play */
@@ -308,7 +412,7 @@ async function renderVidGallery() {
     const mk = (label, fn) => { const b = document.createElement("button"); b.className = "btn ghost"; b.textContent = label; b.onclick = fn; row.appendChild(b); return b; };
     mk("Play", () => vidPlay(it));
     mk("Save…", async () => { try { if (await invoke("image_export", { id: it.id })) toast("Video saved"); } catch (e) { toast(emsg(e)); } });
-    mk("Reuse prompt", () => { $("#vidprompt").value = it.prompt || ""; $("#vidprompt").focus(); $("#vidprompt").scrollIntoView({ block: "center" }); });
+    mk("Reuse", () => vidReuse(it)).title = "Prompt, length and format back into the form";
     mk("Delete", async () => {
       if (!(await askConfirm("Delete this clip from this computer?", "Delete clip"))) return;
       try { await invoke("image_remove", { id: it.id }); } catch (e) { toast(emsg(e)); }
@@ -317,6 +421,9 @@ async function renderVidGallery() {
     card.appendChild(thumb); card.appendChild(cap); card.appendChild(meta); card.appendChild(row);
     box.appendChild(card);
   }
+  // clips made through the connector arrive without a still frame: one at a time
+  const bare = list.slice(0, 120).find((x) => !x.poster && !VID_POSTER_TRIED.has(x.id));
+  if (bare) { VID_POSTER_TRIED.add(bare.id); vidMakePoster(bare.id); }
 }
 
 async function vidPlay(it) {
@@ -341,6 +448,9 @@ function vidClose() {
 function wireVideo() {
   VID_WIRED = true;
   $("#vidgen").onclick = vidGenerate;
+  $("#vidhelp").onclick = vidHelp;
+  $("#vidundo").onclick = vidHelpUndo;
+  $("#vidprompt").addEventListener("input", () => { if (VID_HELP_PREV != null && !$("#vidprompt").value.trim()) vidHelpUndo(); });
   $("#vidprompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); vidGenerate(); } });
   $("#vidusesrc").onchange = () => { $("#vidsrcrow").style.display = $("#vidusesrc").checked ? "" : "none"; };
   $("#vidfile").onchange = async () => {
@@ -359,6 +469,7 @@ function wireVideo() {
 function loadVideo() {
   if (!VID_WIRED) wireVideo();
   fillVidModels().then(vidLoadRates);
+  vidLoadCredit();
   renderVidJobs();
   renderVidGallery();
   if (vidJobs().length) vidWatch(true);

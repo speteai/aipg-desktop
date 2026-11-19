@@ -2747,7 +2747,12 @@ async function renderGallery() {
     const row = document.createElement("div"); row.className = "grow";
     const mk = (label, fn) => { const b = document.createElement("button"); b.className = "btn ghost"; b.textContent = label; b.onclick = fn; row.appendChild(b); return b; };
     mk("Save…", () => exportImage(it));
-    mk("Reuse prompt", () => { $("#imgprompt").value = it.prompt || ""; $("#imgprompt").focus(); $("#imgprompt").scrollIntoView({ block: "center" }); });
+    mk("Reuse", () => {
+      const pick = (sel, v) => { const s = $(sel); if (v && [...s.options].some((o) => o.value === v)) s.value = v; };
+      $("#imgprompt").value = it.prompt || ""; pick("#imgmodel", it.model); pick("#imgsize", it.size);
+      $("#imgprompt").focus(); $("#imgprompt").scrollIntoView({ block: "center" });
+    }).title = "Prompt, model and size back into the form";
+    mk("Animate", () => vidFromImage(it)).title = "Make a video clip that starts from this picture";
     mk("As source", async () => { const u = await galleryData(it.id); if (u) { setImgMode("img2img"); setImgSource(u); $("#imgprompt").scrollIntoView({ block: "center" }); toast("Set as source image"); } });
     mk("Delete", async () => {
       if (!(await askConfirm("Delete this image from the gallery?", "Delete image", false))) return;
