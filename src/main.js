@@ -2719,6 +2719,7 @@ async function renderGallery() {
   if (!TAURI.core) return;
   let list = [];
   try { list = await invoke("images_index"); } catch (e) {}
+  list = list.filter((x) => x.kind !== "video"); // clips have their own view
   $("#imgcountlabel").textContent = list.length ? `${list.length} image${list.length === 1 ? "" : "s"} · stored locally` : "";
   if (!list.length) { box.innerHTML = '<p class="muted">Nothing here yet — your generated images are kept on this machine.</p>'; return; }
   box.innerHTML = "";
@@ -2818,6 +2819,7 @@ function show(view) {
   if (view === "overview") { loadOverview(); renderUsage(); }
   if (view === "chat") loadChat();
   if (view === "images") loadImages();
+  if (view === "video") loadVideo();
   if (view === "worker") loadWorker();
   if (view === "models") loadModels();
   if (view === "earnings") loadEarnings();

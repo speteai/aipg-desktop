@@ -643,6 +643,19 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 .lightbox{flex-direction:column;gap:var(--s3);cursor:zoom-out;padding:var(--s5)}
 .lightbox img{max-width:100%;max-height:calc(100vh - 110px);object-fit:contain;border:1px solid var(--bd)}
 .lightbox p{margin:0;max-width:80ch;text-align:center;color:#fff;font-size:13px}
+.vidbox{cursor:default}
+.vidbox video{max-width:100%;max-height:calc(100vh - 110px);background:#000;border:1px solid var(--bd)}
+.gcard.vcard .vthumb{position:relative;display:block;width:100%;aspect-ratio:16/9;background:var(--code);
+  border:1px solid var(--bd);cursor:pointer;padding:0;overflow:hidden}
+.gcard.vcard .vthumb img{width:100%;height:100%;aspect-ratio:auto;object-fit:cover;border:0;cursor:pointer}
+.gcard.vcard .vthumb::after{content:"";position:absolute;left:50%;top:50%;margin:-11px 0 0 -7px;
+  border-style:solid;border-width:11px 0 11px 18px;border-color:transparent transparent transparent #fff;
+  filter:drop-shadow(0 0 3px rgba(0,0,0,.7))}
+.vidjobs{display:flex;flex-direction:column;gap:var(--s1);margin-top:var(--s3)}
+.vidjobs:empty{display:none}
+.vidjob{display:flex;gap:var(--s3);align-items:baseline;font-size:12.5px}
+.vidjob .st{font:var(--t-micro)/1.3 var(--mono);color:var(--mut);white-space:nowrap}
+.vidjob .pr{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* hidden (retired) workers when revealed */
 .card.dim{opacity:.55}
 .lightbox,:root[data-theme="light"] .lightbox{background:rgba(10,9,8,.9)}

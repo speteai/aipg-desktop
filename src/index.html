@@ -12,6 +12,7 @@
     <button class="nav active" data-view="overview"><span class="ni"></span> Overview</button>
     <button class="nav" data-view="chat"><span class="ni"></span> Chat</button>
     <button class="nav" data-view="images"><span class="ni"></span> Images</button>
+    <button class="nav" data-view="video"><span class="ni"></span> Video</button>
     <button class="nav" data-view="worker"><span class="ni"></span> Run a worker<span id="navjob" class="navjob" title="Serving a grid job"></span></button>
     <button class="nav" data-view="models"><span class="ni"></span> Models</button>
     <button class="nav" data-view="network"><span class="ni"></span> Network</button>
@@ -164,6 +165,53 @@
         <button class="btn ghost" id="btn-images-dir-open">Open folder</button>
       </div>
       <div id="imgresult" class="gallery"></div>
+    </section>
+
+    <!-- VIDEO -->
+    <section class="view" id="view-video">
+      <header class="vh"><h1>Video</h1></header>
+      <div class="chatbar">
+        <select id="vidmodel" class="sel" title="Video model"></select>
+        <label class="seg">Length
+          <select id="vidlen" class="sel">
+            <option value="49">2 s</option>
+            <option value="73" selected>3 s</option>
+            <option value="121">5 s</option>
+            <option value="193">8 s</option>
+            <option value="241">10 s</option>
+          </select>
+        </label>
+        <label class="seg">Format
+          <select id="vidsize" class="sel">
+            <option value="960x544" selected>Landscape · 960×544</option>
+            <option value="768x448">Landscape small · 768×448</option>
+            <option value="544x960">Portrait · 544×960</option>
+            <option value="704x704">Square · 704×704</option>
+          </select>
+        </label>
+        <span id="vidprice" class="muted"></span>
+      </div>
+      <p class="hint">Generated on the grid with your account, billed per second of video. A clip has sound. Once started, a clip cannot be cancelled; it is fetched even if you leave this view or close the app. Clips are kept in the same folder as your images.</p>
+      <div class="field" style="max-width:none">
+        <div class="row">
+          <label class="seg" title="Optional: the clip starts from this picture"><input type="checkbox" id="vidusesrc"> Start from a picture</label>
+          <span id="vidsrcrow" style="display:none">
+            <input type="file" id="vidfile" accept="image/png,image/jpeg,image/webp">
+            <span id="vidsrcprev" class="srcprev"></span>
+          </span>
+        </div>
+        <textarea id="vidprompt" rows="5" placeholder="Describe the clip: what is seen, how it moves, what is heard… (Ctrl+Enter to generate)"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="btn primary" id="vidgen">Generate</button>
+          <span id="vidmsg" class="muted"></span>
+        </div>
+        <div id="vidjobs" class="vidjobs"></div>
+      </div>
+      <div class="vh" style="margin-top:22px">
+        <h2 class="sec" style="margin:0">Clips</h2>
+        <span id="vidcountlabel" class="muted"></span>
+      </div>
+      <div id="vidresult" class="gallery"></div>
     </section>
 
     <!-- WORKER -->
@@ -720,9 +768,11 @@
   </div>
 
   <div id="lightbox" class="overlay lightbox" style="display:none"><img alt=""><p></p></div>
+  <div id="vidbox" class="overlay lightbox vidbox" style="display:none"><video controls loop playsinline></video><p></p></div>
 
   <div id="toast" class="toast"></div>
   <script src="privacy.js"></script>
 <script src="main.js"></script>
+<script src="video.js"></script>
 </body>
 </html>

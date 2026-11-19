@@ -49,6 +49,10 @@ Chat works right away — running a worker is optional and needs an API key.
   and count options, live generation progress, and a **local gallery** (save, reuse a
   prompt, use a result as the next source image). You choose the **folder the images
   are saved in**; the prompt box is full-width and remembers its height.
+- **Video** — short clips with sound from a text prompt, optionally starting from a
+  picture, on the grid's video model. Length and format are chosen before the start and
+  the price is shown first (billed per second of video). A started clip is fetched even
+  if you close the app, and is kept and played in a local gallery next to your images.
 - **Run a worker** — one click turns your machine into a grid worker and starts earning:
   - downloads the **official** `grid-inference-worker` binary and checks it against a
     SHA-256 that is fixed in this app's source code,

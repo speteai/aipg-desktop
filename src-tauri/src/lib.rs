@@ -148,6 +148,7 @@ pub fn run() {
             worker::images_index,
             worker::image_data,
             worker::image_remove,
+            worker::image_poster_set,
             worker::image_export,
             worker::images_dir_get,
             worker::images_dir_set,
