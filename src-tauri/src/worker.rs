@@ -2009,9 +2009,12 @@ fn images_save(app: &AppHandle, list: &[serde_json::Value]) -> Result<(), String
     std::fs::write(&tmp, serde_json::to_vec(list).map_err(e)?).map_err(e)?;
     std::fs::rename(&tmp, &p).map_err(e)
 }
-/// File extension + MIME type from the image's magic bytes.
+/// File extension + MIME type from the file's magic bytes. The gallery also
+/// holds generated video clips (MP4).
 fn image_kind(b: &[u8]) -> (&'static str, &'static str) {
-    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+    if b.len() > 12 && &b[4..8] == b"ftyp" {
+        ("mp4", "video/mp4")
+    } else if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
         ("jpg", "image/jpeg")
     } else if b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
         ("webp", "image/webp")
@@ -2076,7 +2079,7 @@ pub async fn image_store(
             .await
             .map_err(e)?;
         if !r.status().is_success() {
-            return Err(format!("Could not download the image: HTTP {}", r.status()));
+            return Err(format!("Could not download the file: HTTP {}", r.status()));
         }
         r.bytes().await.map_err(e)?.to_vec()
     } else {
@@ -2124,6 +2127,22 @@ pub async fn image_data(app: AppHandle, id: String) -> Result<String, String> {
     ))
 }
 
+/// Attach a small still frame to a stored video, shown in the gallery instead
+/// of loading the whole clip. Only a JPEG data URL of bounded size is kept.
+#[tauri::command]
+pub fn image_poster_set(app: AppHandle, id: String, poster: String) -> Result<(), String> {
+    if !poster.starts_with("data:image/jpeg;base64,") || poster.len() > 200_000 {
+        return Err("Unsupported preview image.".into());
+    }
+    let mut list = images_load(&app);
+    let entry = list
+        .iter_mut()
+        .find(|x| x["id"].as_str() == Some(id.as_str()))
+        .ok_or("Video not found.")?;
+    entry["poster"] = serde_json::json!(poster);
+    images_save(&app, &list)
+}
+
 #[tauri::command]
 pub fn image_remove(app: AppHandle, id: String) -> Result<(), String> {
     if let Ok(f) = image_file(&app, &id) {
@@ -2147,9 +2166,10 @@ pub async fn image_export(app: AppHandle, id: String) -> Result<bool, String> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "aipg-image.png".into());
+    let title = if name.ends_with(".mp4") { "Save video" } else { "Save image" };
     let app2 = app.clone();
     let picked = tokio::task::spawn_blocking(move || {
-        app2.dialog().file().set_title("Save image").set_file_name(name).blocking_save_file()
+        app2.dialog().file().set_title(title).set_file_name(name).blocking_save_file()
     })
     .await
     .map_err(e)?;

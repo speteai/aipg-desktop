@@ -54,6 +54,7 @@ tap_text "Not now"; shot 02-start-chat
 if tap_text "Model*"; then shot 03-model-picker 2; back; sleep 2; fi
 if tap_text "Options"; then shot 04-chat-options 2; back; sleep 2; fi
 tap_text "Images"; shot 05-images
+tap_text "Video"; shot 05b-video
 tap_text "Workers"; shot 06-workers
 tap_text "More"; shot 07-more
 if tap_text "Models *"; then

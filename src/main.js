@@ -18,7 +18,7 @@ let POLL = null;
 const MOBILE = /Android/i.test(navigator.userAgent);
 if (MOBILE) document.documentElement.classList.add("mobile");
 const MORE_VIEWS = ["models", "network", "settings", "more"];
-const MTABS = ["chat", "images", "mworkers", "more"];
+const MTABS = ["chat", "images", "video", "mworkers", "more"];
 // what a desktop view becomes on the phone
 const MOBILE_VIEW = { worker: "mworkers", connect: "more", overview: "more", earnings: "mworkers" };
 let CUR_VIEW = null;
@@ -2675,7 +2675,14 @@ function setImgMode(mode) {
   $("#imgsrcrow").style.display = mode === "img2img" ? "" : "none";
 }
 
+/* the nav entry of a view pulses while something is being generated there */
+function navWorking(view, on) {
+  const b = document.querySelector(`.nav[data-view="${view}"]`);
+  if (b) b.classList.toggle("working", !!on);
+}
+
 function imgBusy(on) {
+  navWorking("images", on);
   $("#imggen").style.display = on ? "none" : "";
   $("#imgcancel").style.display = on ? "" : "none";
   if (!on) { clearInterval(IMG_TICK); IMG_TICK = null; $("#imgbar").style.display = "none"; }
@@ -2800,6 +2807,7 @@ async function renderGallery() {
   if (!TAURI.core) return;
   let list = [];
   try { list = await invoke("images_index"); } catch (e) {}
+  list = list.filter((x) => x.kind !== "video"); // clips have their own view
   $("#imgcountlabel").textContent = list.length ? `${list.length} image${list.length === 1 ? "" : "s"} · stored locally` : "";
   if (!list.length) { box.innerHTML = '<p class="muted">Nothing here yet — your generated images are kept on this device.</p>'; return; }
   box.innerHTML = "";
@@ -2820,7 +2828,12 @@ async function renderGallery() {
     const row = document.createElement("div"); row.className = "grow";
     const mk = (label, fn) => { const b = document.createElement("button"); b.className = "btn ghost"; b.textContent = label; b.onclick = fn; row.appendChild(b); return b; };
     mk("Save…", () => exportImage(it));
-    mk("Reuse prompt", () => { $("#imgprompt").value = it.prompt || ""; $("#imgprompt").focus(); $("#imgprompt").scrollIntoView({ block: "center" }); });
+    mk("Reuse", () => {
+      const pick = (sel, v) => { const s = $(sel); if (v && [...s.options].some((o) => o.value === v)) s.value = v; };
+      $("#imgprompt").value = it.prompt || ""; pick("#imgmodel", it.model); pick("#imgsize", it.size);
+      $("#imgprompt").focus(); $("#imgprompt").scrollIntoView({ block: "center" });
+    }).title = "Prompt, model and size back into the form";
+    mk("Animate", () => vidFromImage(it)).title = "Make a video clip that starts from this picture";
     mk("As source", async () => { const u = await galleryData(it.id); if (u) { setImgMode("img2img"); setImgSource(u); $("#imgprompt").scrollIntoView({ block: "center" }); toast("Set as source image"); } });
     mk("Delete", async () => {
       if (!(await askConfirm("Delete this image from the gallery?", "Delete image", false))) return;
@@ -2998,6 +3011,7 @@ function show(view, fromHistory) {
   if (view === "overview") { loadOverview(); renderUsage(); }
   if (view === "chat") loadChat();
   if (view === "images") loadImages();
+  if (view === "video") loadVideo();
   if (view === "worker") loadWorker();
   if (view === "models") loadModels();
   if (view === "earnings") loadEarnings();
