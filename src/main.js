@@ -2594,7 +2594,14 @@ function setImgMode(mode) {
   $("#imgsrcrow").style.display = mode === "img2img" ? "" : "none";
 }
 
+/* the nav entry of a view pulses while something is being generated there */
+function navWorking(view, on) {
+  const b = document.querySelector(`.nav[data-view="${view}"]`);
+  if (b) b.classList.toggle("working", !!on);
+}
+
 function imgBusy(on) {
+  navWorking("images", on);
   $("#imggen").style.display = on ? "none" : "";
   $("#imgcancel").style.display = on ? "" : "none";
   if (!on) { clearInterval(IMG_TICK); IMG_TICK = null; $("#imgbar").style.display = "none"; }

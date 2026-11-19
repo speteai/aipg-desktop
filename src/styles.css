@@ -175,6 +175,9 @@ code{font-family:var(--mono);font-size:.9em;background:var(--code);
 .nav.active{color:var(--fg);font-weight:600;border-left-color:var(--acc-fill);box-shadow:none}
 .nav.active .ni::before{color:var(--acc)}
 .nav:focus-visible{outline-offset:-2px}
+/* something is being generated in this view (a picture, a clip) */
+.nav.working{color:var(--fg);animation:pulse 1.2s ease-in-out infinite}
+.nav.working .ni::before{color:var(--acc)}
 
 .conn{display:flex;align-items:center;gap:var(--s2);
   margin:0 var(--s4);padding:var(--s3) 0 var(--s2);border-top:1px solid var(--bd);
@@ -255,7 +258,7 @@ input[type=file]{font:var(--t-small) var(--mono);color:var(--mut);max-width:100%
 
 /* Inline styles in the markup hard-code a 8–10px radius on these two; pull
    them back to the control radius until the inline styles are removed. */
-#imgprompt,#wc-key{border-radius:var(--r) !important}
+#imgprompt,#vidprompt,#wc-key{border-radius:var(--r) !important}
 
 .hint{color:var(--mut);font-size:var(--t-small);line-height:1.5;margin:var(--s2) 0 0;max-width:72ch}
 .hint:empty{display:none}
@@ -489,7 +492,7 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 
 .imgresult{margin-top:var(--s5);display:flex;flex-direction:column;gap:var(--s3);align-items:flex-start}
 .imgresult img{display:block;max-width:100%;height:auto;border-radius:0;border:1px solid var(--bd)}
-#imgprompt{display:block;width:100%;min-height:132px;max-height:70vh;resize:vertical}
+#imgprompt,#vidprompt{display:block;width:100%;min-height:132px;max-height:70vh;resize:vertical}
 .imgdir{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);margin:var(--s3) 0 var(--s4)}
 .imgdir .path{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
@@ -604,6 +607,7 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{transition:none !important}
   .step.active .dot{animation:none}
+  .nav.working{animation:none}
 }
 
 /* models-folder path chip */

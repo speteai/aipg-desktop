@@ -222,6 +222,7 @@ function vidStateText(j) {
   return j.job ? "started" : "sending";
 }
 function renderVidJobs() {
+  navWorking("video", vidJobs().some((j) => !j.hold));
   const box = $("#vidjobs"); if (!box) return;
   box.innerHTML = "";
   for (const j of vidJobs()) {
@@ -364,4 +365,4 @@ function loadVideo() {
 }
 
 // clips started before the app was closed are collected without opening the view
-if (TAURI.core && vidJobs().length) setTimeout(() => vidWatch(false), 8000);
+if (TAURI.core && vidJobs().length) { renderVidJobs(); setTimeout(() => vidWatch(false), 8000); }
