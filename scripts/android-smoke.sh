@@ -54,6 +54,13 @@ tap_text "Not now"; shot 02-start-chat
 if tap_text "Model*"; then shot 03-model-picker 2; back; sleep 2; fi
 if tap_text "Options"; then shot 04-chat-options 2; back; sleep 2; fi
 tap_text "Images"; shot 05-images
+# the switch for a copy in the phone's gallery: on, look at the folders, off again
+adb shell input swipe 500 1500 500 600 300; sleep 2
+if tap_text "Also keep*"; then
+  shot 05a-shared-copy-on 3
+  { echo "shared folders after switching on:"; adb shell ls -ld /sdcard/Pictures/AIPG /sdcard/Movies/AIPG; adb shell ls -la /sdcard/Pictures/AIPG /sdcard/Movies/AIPG; } >> out/steps.txt 2>&1
+  tap_text "Also keep*"; shot 05a-shared-copy-off 3
+fi
 tap_text "Video"; shot 05b-video
 tap_text "Workers"; shot 06-workers
 tap_text "More"; shot 07-more

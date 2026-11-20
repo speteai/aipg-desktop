@@ -230,6 +230,8 @@ pub fn run() {
             worker::images_dir_get,
             worker::images_dir_set,
             worker::images_dir_open,
+            worker::shared_copy_get,
+            worker::shared_copy_set,
             worker::chats_read,
             worker::chats_write,
             tray_status,

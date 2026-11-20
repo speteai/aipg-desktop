@@ -171,6 +171,10 @@
         <button class="btn ghost" id="btn-images-dir-reset" style="display:none">Default</button>
         <button class="btn ghost" id="btn-images-dir-open">Open folder</button>
       </div>
+      <div class="row sharedrow monly">
+        <label><input type="checkbox" class="sharedbox"> Also keep pictures and clips in the phone's gallery</label>
+        <span class="muted sharedmsg">Pictures/AIPG and Movies/AIPG</span>
+      </div>
       <div id="imgresult" class="gallery"></div>
     </section>
 
@@ -198,7 +202,7 @@
         </label>
         <span id="vidprice" class="muted"></span>
       </div>
-      <p class="hint">Generated on the grid with your account, billed per second of video. A clip has sound. Once started, a clip cannot be cancelled; it is fetched even if you leave this view or close the app. Clips are kept in the same folder as your images.</p>
+      <p class="hint">Generated on the grid with your account, billed per second of video. A clip has sound. Once started, a clip cannot be cancelled; it is fetched even if you leave this view or close the app. Clips are kept in the same folder as your images; <span class="donly">it is shown above the clips below.</span></p>
       <div class="field" style="max-width:none">
         <div class="row">
           <label class="seg" title="Optional: the clip starts from this picture"><input type="checkbox" id="vidusesrc"> Start from a picture</label>
@@ -219,6 +223,17 @@
       <div class="vh" style="margin-top:22px">
         <h2 class="sec" style="margin:0">Clips</h2>
         <span id="vidcountlabel" class="muted"></span>
+      </div>
+      <div class="row imgdir donly">
+        <span class="k">Saved in</span>
+        <code id="vid-dir" class="path" title="Pictures and clips share this folder">…</code>
+        <button class="btn ghost" id="btn-vid-dir">Change…</button>
+        <button class="btn ghost" id="btn-vid-dir-reset" style="display:none">Default</button>
+        <button class="btn ghost" id="btn-vid-dir-open">Open folder</button>
+      </div>
+      <div class="row sharedrow monly">
+        <label><input type="checkbox" class="sharedbox"> Also keep pictures and clips in the phone's gallery</label>
+        <span class="muted sharedmsg">Pictures/AIPG and Movies/AIPG</span>
       </div>
       <div id="vidresult" class="gallery"></div>
     </section>

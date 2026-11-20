@@ -450,6 +450,11 @@ function wireVideo() {
   $("#vidgen").onclick = vidGenerate;
   wirePicker($("#vidmodel"), "Video model");
   if (MOBILE) $("#vidprompt").placeholder = "Describe the clip: what is seen, how it moves, what is heard…";
+  $("#btn-vid-dir").onclick = pickImagesDir;
+  $("#btn-vid-dir-reset").onclick = () => switchImagesDir("");
+  $("#btn-vid-dir-open").onclick = async () => { try { await invoke("images_dir_open"); } catch (e) { toast(emsg(e)); } };
+  loadImagesDir();
+  wireSharedCopy();
   $("#vidhelp").onclick = vidHelp;
   $("#vidundo").onclick = vidHelpUndo;
   $("#vidprompt").addEventListener("input", () => { if (VID_HELP_PREV != null && !$("#vidprompt").value.trim()) vidHelpUndo(); });

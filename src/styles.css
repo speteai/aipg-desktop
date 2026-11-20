@@ -683,6 +683,9 @@ details.adv > h2.sec:first-of-type{margin-top:var(--s2)}
 
 .mobile #view-images .chatbar{flex-wrap:wrap;overflow:visible}
 .mobile #view-video .chatbar{flex-wrap:wrap;overflow:visible}
+.mobile .sharedrow.monly{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s1);margin:var(--s3) 0 var(--s4)}
+.sharedrow label{display:flex;align-items:center;gap:var(--s2);min-height:44px}
+.sharedrow input{width:20px;height:20px}
 .mobile #vidmodel{flex:1 1 100%;width:100%;max-width:none}
 .mobile #view-video .pickbtn{flex:1 1 100%}
 .mobile .vidbox video{max-height:calc(100vh - 160px)}

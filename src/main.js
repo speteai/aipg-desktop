@@ -2771,10 +2771,30 @@ function addLooseImage(src, meta) {
   $("#imgresult").prepend(card);
 }
 
+/* one folder for pictures and clips; it is shown in the Images and in the Video view */
 function showImagesDir(d) {
-  $("#images-dir").textContent = d.path;
-  $("#images-dir").title = d.path;
-  $("#btn-images-dir-reset").style.display = d.custom ? "" : "none";
+  for (const id of ["#images-dir", "#vid-dir"]) { $(id).textContent = d.path; $(id).title = d.path; }
+  for (const id of ["#btn-images-dir-reset", "#btn-vid-dir-reset"]) $(id).style.display = d.custom ? "" : "none";
+}
+/* phone: the gallery is in the app's private storage; this keeps a copy of every
+   picture and clip in the phone's own gallery folders as well */
+const SHARED_HINT = "Pictures/AIPG and Movies/AIPG";
+function showSharedCopy(d, msg) {
+  document.querySelectorAll(".sharedbox").forEach((b) => { b.checked = !!d.on; b.disabled = !d.available; });
+  document.querySelectorAll(".sharedmsg").forEach((s) => { s.textContent = msg || SHARED_HINT; });
+}
+async function setSharedCopy(on) {
+  try {
+    const d = await invoke("shared_copy_set", { on });
+    showSharedCopy(d, on ? `On · ${d.copied} file${d.copied === 1 ? "" : "s"} copied to ${SHARED_HINT}` : "Off · copies already made stay in the gallery");
+  } catch (e) {
+    showSharedCopy({ on: false, available: true }, "⚠ " + emsg(e));
+  }
+}
+async function wireSharedCopy() {
+  if (!TAURI.core || !MOBILE) return;
+  document.querySelectorAll(".sharedbox").forEach((b) => { b.onchange = () => setSharedCopy(b.checked); });
+  try { showSharedCopy(await invoke("shared_copy_get")); } catch (e) {}
 }
 async function loadImagesDir() {
   if (!TAURI.core) return;
@@ -2784,9 +2804,10 @@ async function switchImagesDir(path) {
   try {
     const d = await invoke("images_dir_set", { path });
     showImagesDir(d);
-    toast(d.moved ? `Images folder updated · ${d.moved} image${d.moved === 1 ? "" : "s"} moved` : "Images folder updated");
+    toast(d.moved ? `Folder updated · ${d.moved} file${d.moved === 1 ? "" : "s"} moved` : "Folder updated");
   } catch (e) { toast(emsg(e)); }
   renderGallery();
+  if (VID_WIRED) renderVidGallery();
 }
 async function pickImagesDir() {
   if (!TAURI.core) return;
@@ -2878,6 +2899,7 @@ function wireImages() {
   $("#btn-images-dir-reset").onclick = () => switchImagesDir("");
   $("#btn-images-dir-open").onclick = async () => { try { await invoke("images_dir_open"); } catch (e) { toast(emsg(e)); } };
   loadImagesDir();
+  wireSharedCopy();
   const sz = get("aipg_imgsize"); if (sz && [...$("#imgsize").options].some((o) => o.value === sz)) $("#imgsize").value = sz;
   $("#lightbox").onclick = () => { $("#lightbox").style.display = "none"; };
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#lightbox").style.display = "none"; });
