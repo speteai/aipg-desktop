@@ -2690,10 +2690,10 @@ function addLooseImage(src, meta) {
   $("#imgresult").prepend(card);
 }
 
+/* one folder for pictures and clips; it is shown in the Images and in the Video view */
 function showImagesDir(d) {
-  $("#images-dir").textContent = d.path;
-  $("#images-dir").title = d.path;
-  $("#btn-images-dir-reset").style.display = d.custom ? "" : "none";
+  for (const id of ["#images-dir", "#vid-dir"]) { $(id).textContent = d.path; $(id).title = d.path; }
+  for (const id of ["#btn-images-dir-reset", "#btn-vid-dir-reset"]) $(id).style.display = d.custom ? "" : "none";
 }
 async function loadImagesDir() {
   if (!TAURI.core) return;
@@ -2703,9 +2703,10 @@ async function switchImagesDir(path) {
   try {
     const d = await invoke("images_dir_set", { path });
     showImagesDir(d);
-    toast(d.moved ? `Images folder updated · ${d.moved} image${d.moved === 1 ? "" : "s"} moved` : "Images folder updated");
+    toast(d.moved ? `Folder updated · ${d.moved} file${d.moved === 1 ? "" : "s"} moved` : "Folder updated");
   } catch (e) { toast(emsg(e)); }
   renderGallery();
+  if (VID_WIRED) renderVidGallery();
 }
 async function pickImagesDir() {
   if (!TAURI.core) return;

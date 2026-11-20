@@ -52,7 +52,8 @@ Chat works right away — running a worker is optional and needs an API key.
 - **Video** — short clips with sound from a text prompt, optionally starting from a
   picture, on the grid's video model. Length and format are chosen before the start and
   the price is shown first (billed per second of video). A started clip is fetched even
-  if you close the app, and is kept and played in a local gallery next to your images.
+  if you close the app, and is kept and played in a local gallery next to your images
+  (the folder is shown and changed in both views).
   "Animate" on a picture in the Images gallery starts a clip from it; "Improve prompt"
   has a text model on the grid turn a short idea into a full description (one small
   text request); your credit is shown next to the price.

@@ -448,6 +448,10 @@ function vidClose() {
 function wireVideo() {
   VID_WIRED = true;
   $("#vidgen").onclick = vidGenerate;
+  $("#btn-vid-dir").onclick = pickImagesDir;
+  $("#btn-vid-dir-reset").onclick = () => switchImagesDir("");
+  $("#btn-vid-dir-open").onclick = async () => { try { await invoke("images_dir_open"); } catch (e) { toast(emsg(e)); } };
+  loadImagesDir();
   $("#vidhelp").onclick = vidHelp;
   $("#vidundo").onclick = vidHelpUndo;
   $("#vidprompt").addEventListener("input", () => { if (VID_HELP_PREV != null && !$("#vidprompt").value.trim()) vidHelpUndo(); });

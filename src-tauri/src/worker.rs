@@ -2085,6 +2085,10 @@ pub async fn image_store(
     std::fs::create_dir_all(&dir).map_err(|x| format!("Images folder cannot be used: {x}"))?;
     std::fs::write(dir.join(&file), &bytes)
         .map_err(|x| format!("Could not save into {}: {x}", dir.display()))?;
+    // phone: also into the shared media folders when the user switched that on
+    if let Some(root) = shared_media_root().filter(|_| shared_copy_on(&app)) {
+        let _ = shared_copy(&root, &dir.join(&file), &file);
+    }
     let mut entry = if meta.is_object() { meta } else { serde_json::json!({}) };
     entry["id"] = serde_json::json!(id);
     entry["file"] = serde_json::json!(file);
@@ -2161,6 +2165,98 @@ pub async fn image_export(app: AppHandle, id: String) -> Result<bool, String> {
     let Some(dest) = picked else { return Ok(false) };
     let dest = dest.into_path().map_err(e)?;
     std::fs::copy(src, dest).map(|_| true).map_err(e)
+}
+
+/* ---------- copy in the phone's shared media folders (Android) ----------
+   The gallery lives in the app's private storage, which other apps cannot see
+   and which is removed with the app. When switched on, every stored picture is
+   also written to Pictures/AIPG and every clip to Movies/AIPG, where the
+   phone's own gallery shows them. Android 11 and newer let an app create media
+   files there by path without a permission; older versions refuse, which the
+   switch reports. */
+fn shared_media_root() -> Option<PathBuf> {
+    if !cfg!(target_os = "android") {
+        return None;
+    }
+    let root = std::env::var("EXTERNAL_STORAGE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "/storage/emulated/0".to_string());
+    Some(PathBuf::from(root))
+}
+fn shared_copy_flag(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("shared_copy.txt")
+}
+fn shared_copy_on(app: &AppHandle) -> bool {
+    shared_copy_flag(app).exists()
+}
+/// Where the copy of a gallery file goes: clips to Movies/AIPG, pictures to Pictures/AIPG.
+pub(crate) fn shared_target(root: &std::path::Path, file: &str) -> PathBuf {
+    let kind = if file.to_ascii_lowercase().ends_with(".mp4") { "Movies" } else { "Pictures" };
+    root.join(kind).join("AIPG").join(format!("aipg-{file}"))
+}
+/// Copies one gallery file; an existing copy is left alone. Returns whether a file was written.
+pub(crate) fn shared_copy(root: &std::path::Path, src: &std::path::Path, file: &str) -> Result<bool, String> {
+    let target = shared_target(root, file);
+    if target.exists() {
+        return Ok(false);
+    }
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir).map_err(e)?;
+    }
+    std::fs::copy(src, &target).map_err(e)?;
+    Ok(true)
+}
+/// Writes and removes a tiny picture and clip file, the same operation a real copy needs.
+pub(crate) fn shared_probe(root: &std::path::Path) -> Result<(), String> {
+    for file in ["write-test.png", "write-test.mp4"] {
+        let target = shared_target(root, file);
+        if let Some(dir) = target.parent() {
+            std::fs::create_dir_all(dir).map_err(e)?;
+        }
+        std::fs::write(&target, b"\x89PNG\r\n\x1a\n").map_err(e)?;
+        let _ = std::fs::remove_file(&target);
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct SharedCopy {
+    available: bool,
+    on: bool,
+    copied: usize,
+}
+
+#[tauri::command]
+pub fn shared_copy_get(app: AppHandle) -> SharedCopy {
+    SharedCopy {
+        available: shared_media_root().is_some(),
+        on: shared_media_root().is_some() && shared_copy_on(&app),
+        copied: 0,
+    }
+}
+
+/// Switch the copy on or off. Switching on copies what the gallery already holds.
+#[tauri::command]
+pub async fn shared_copy_set(app: AppHandle, on: bool) -> Result<SharedCopy, String> {
+    let root = shared_media_root().ok_or("Only available on a phone.")?;
+    if !on {
+        let _ = std::fs::remove_file(shared_copy_flag(&app));
+        return Ok(SharedCopy { available: true, on: false, copied: 0 });
+    }
+    shared_probe(&root).map_err(|x| {
+        format!("This phone does not let the app write into its gallery folders ({x}). It needs Android 11 or newer. Use Save… on a picture or clip instead.")
+    })?;
+    let mut copied = 0;
+    for item in images_load(&app) {
+        let Some(file) = item["file"].as_str() else { continue };
+        let src = image_files_dir(&app).join(file);
+        if src.is_file() && shared_copy(&root, &src, file).unwrap_or(false) {
+            copied += 1;
+        }
+    }
+    std::fs::write(shared_copy_flag(&app), "on").map_err(e)?;
+    Ok(SharedCopy { available: true, on: true, copied })
 }
 
 #[derive(Serialize)]
